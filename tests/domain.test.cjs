@@ -196,3 +196,25 @@ test("问答保存默认不授权自动发送", () => {
   );
   assert.throws(() => validateFAQ({ question: "", answer: "答案" }));
 });
+test("宽聊天区域中的左侧短气泡仍识别为客户，输入框按钮不成为最新消息", () => {
+  const s = settings();
+  s.calibration.messages = { x: 0.4, y: 0.1, w: 0.6, h: 0.88 };
+  s.calibration.composer = { x: 0.42, y: 0.78, w: 0.55, h: 0.18 };
+  const shot = {
+    width: 1280,
+    height: 1166,
+    lines: [
+      line("客户甲", 0.45, 0.04),
+      {
+        text: "在吗",
+        confidence: 0.99,
+        box: { x: 0.56, y: 0.72, w: 0.045, h: 0.025 },
+        outgoing: false,
+      },
+      line("发送", 0.9, 0.94),
+    ],
+  };
+  const parsed = parseSnapshot(shot, s);
+  assert.equal(parsed.last.role, "in");
+  assert.equal(parsed.last.text, "在吗");
+});

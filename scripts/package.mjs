@@ -1,3 +1,4 @@
+import { signingOptions } from "./signing.mjs";
 import { execFileSync } from "node:child_process";
 import {
   cpSync,
@@ -11,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(import.meta.url);
+const manifest = JSON.parse(readFileSync(root + "/package.json", "utf8"));
 const electron = require("electron");
 const base = electron.slice(0, electron.indexOf("/Contents/MacOS/"));
 const app = root + "/dist/回响.app";
@@ -28,7 +30,7 @@ writeFileSync(
   JSON.stringify({
     name: "huixiang-desktop",
     productName: "回响",
-    version: "0.1.0",
+    version: manifest.version,
     main: "app/main.cjs",
   }),
 );
@@ -36,6 +38,10 @@ mkdirSync(resources + "/native", { recursive: true });
 cpSync(
   root + "/native/bin/HuixiangBridge",
   resources + "/native/HuixiangBridge",
+);
+cpSync(
+  root + "/native/bin/MacControl.node",
+  resources + "/native/MacControl.node",
 );
 cpSync(root + "/README.md", resources + "/app/README.md");
 cpSync(
@@ -88,7 +94,7 @@ for (const [key, value] of Object.entries({
   CFBundleName: "回响",
   CFBundleDisplayName: "回响",
   CFBundleExecutable: "Huixiang",
-  CFBundleShortVersionString: "0.1.0",
+  CFBundleShortVersionString: manifest.version,
   CFBundleVersion: "1",
   CFBundleIconFile: "AppIcon.icns",
   NSHumanReadableCopyright: "回响 · 本地预览版",
@@ -115,7 +121,7 @@ execFileSync("/usr/libexec/PlistBuddy", [
   plist,
 ]);
 renameSync(app + "/Contents/MacOS/Electron", app + "/Contents/MacOS/Huixiang");
-execFileSync("codesign", ["--force", "--deep", "--sign", "-", app], {
+execFileSync("codesign", ["--force", "--deep", ...signingOptions(), app], {
   stdio: "inherit",
 });
 execFileSync("codesign", ["--verify", "--deep", "--strict", app], {

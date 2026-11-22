@@ -9,13 +9,18 @@ const {
   Notification,
   session,
   powerMonitor,
+  systemPreferences,
+  dialog,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { fileURLToPath } = require("node:url");
 const { Store } = require("./lib/store.cjs");
 const { NativeBridge } = require("./lib/native.cjs");
-const { Agent } = require("./lib/agent.cjs");
+const { FleetAgent: Agent } = require("./lib/fleet-agent.cjs");
+const { MacControlBridge } = require("./lib/mac-control.cjs");
+const { importProvider } = require("./lib/provider-import.cjs");
+const { readBusinessDocument } = require("./lib/documents.cjs");
 app.setName("回响");
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
@@ -63,10 +68,10 @@ function broadcast(state) {
 }
 function createWindow() {
   window = new BrowserWindow({
-    width: 1220,
-    height: 830,
-    minWidth: 920,
-    minHeight: 680,
+    width: 500,
+    height: 790,
+    minWidth: 420,
+    minHeight: 580,
     backgroundColor: "#f5f7fa",
     title: "回响 · 微信接待助手",
     titleBarStyle: "hiddenInset",
@@ -94,6 +99,11 @@ function register() {
     version: app.getVersion(),
   }));
   safeIPC("settings:save", (value) => {
+    if (
+      value.away?.enabled &&
+      (!store.data.settings.away?.enabled || !value.away.sessionId)
+    )
+      value.away.sessionId = require("node:crypto").randomUUID();
     agent.stop("配置已更新，请重新开始接待");
     agent.draft = null;
     agent.latest = null;
@@ -111,6 +121,65 @@ function register() {
     agent.draft = null;
     return store.removeFAQ(String(id));
   });
+  safeIPC("knowledge:import", async () => {
+    const selected = await dialog.showOpenDialog(window, {
+      title: "导入业务资料",
+      properties: ["openFile"],
+      filters: [{ name: "业务文档", extensions: ["txt", "md", "pdf", "docx"] }],
+    });
+    if (selected.canceled) return store.public();
+    const value = await readBusinessDocument(
+      selected.filePaths[0],
+      new NativeBridge(nativeBinary),
+    );
+    agent.stop("业务资料已更新，请重新开始接待");
+    agent.draft = null;
+    return store.document(value);
+  });
+  safeIPC("knowledge:remove", (id) => {
+    agent.stop("业务资料已更新，请重新开始接待");
+    return store.removeDocument(String(id));
+  });
+  safeIPC("agent:practice", async (value) => {
+    const messages = (Array.isArray(value) ? value : [])
+      .slice(-20)
+      .filter(
+        (m) => ["in", "out"].includes(m.role) && typeof m.text === "string",
+      )
+      .map((m) => ({ role: m.role, text: m.text.trim().slice(0, 3000) }));
+    if (
+      !messages.length ||
+      messages.at(-1).role !== "in" ||
+      !messages.at(-1).text
+    )
+      throw new Error("先写一条客户咨询");
+    return agent.intelligence().decide(messages, {});
+  });
+  safeIPC("native:smart-layout", async (id) => {
+    if (agent.running || agent.busy) throw new Error("先暂停接待，再识别窗口");
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error("先选择微信窗口");
+    const capture = await native.request("capture", { windowId: id });
+    return { capture, ...(await agent.intelligence().layout(capture)) };
+  });
+  safeIPC("agent:discover", () => agent.discover());
+  safeIPC("agent:summarize-current", () => agent.summarizeCurrent());
+  safeIPC("agent:review-task", (id) => agent.reviewTask(String(id)));
+  safeIPC("jobs:test", () =>
+    new (require("./lib/jobs.cjs").JobCatalog)().search({
+      q: "翻译",
+      province: "rayong",
+    }),
+  );
+  safeIPC("agent:retry-current", (value) =>
+    agent.retryCurrent(
+      value && typeof value === "object"
+        ? {
+            confirmedPrepared: value.confirmedPrepared === true,
+            expectedTitle: String(value.expectedTitle || "").slice(0, 100),
+          }
+        : {},
+    ),
+  );
   safeIPC("native:permissions", () => native.request("permissions"));
   safeIPC("native:request-permission", (type) => {
     if (!["screen", "accessibility"].includes(type))
@@ -125,7 +194,14 @@ function register() {
   });
   safeIPC("agent:read", () => agent.read());
   safeIPC("agent:generate", () => agent.generate());
-  safeIPC("agent:start", () => agent.start());
+  safeIPC("agent:start", async () => {
+    try {
+      return await agent.start();
+    } catch (error) {
+      agent.stop(error.message);
+      throw error;
+    }
+  });
   safeIPC("agent:stop", () => {
     agent.stop("你已暂停接待");
     return agent.state();
@@ -170,7 +246,7 @@ function register() {
 }
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
     if (!single) return;
     try {
       store = new Store(path.join(app.getPath("userData"), "workspace"));
@@ -179,7 +255,25 @@ app
       app.quit();
       return;
     }
-    native = new NativeBridge(nativeBinary);
+    try {
+      const imported = await importProvider({
+        file: path.join(store.dir, "provider-import.json"),
+        store,
+        safeStorage,
+      });
+      if (imported) sessionKey = imported.key;
+    } catch (error) {
+      store.log("warning", "AI 接口自动配置未完成，请检查模型设置。");
+    }
+    const controlPath = app.isPackaged
+      ? path.join(process.resourcesPath, "native/MacControl.node")
+      : path.join(__dirname, "../native/bin/MacControl.node");
+    native = new MacControlBridge({
+      helper: new NativeBridge(nativeBinary),
+      control: require(controlPath),
+      preferences: systemPreferences,
+      idleTime: () => powerMonitor.getSystemIdleTime(),
+    });
     agent = new Agent({
       store,
       native,
@@ -199,6 +293,13 @@ app
         }
       },
     });
+    const activityPoll = setInterval(() => {
+      try {
+        if (!native.navigating)
+          agent.setActivityPaused(native.control.isWeChatActive());
+      } catch {}
+    }, 500);
+    activityPoll.unref();
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
     );

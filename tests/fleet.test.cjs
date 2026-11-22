@@ -1,0 +1,248 @@
+const test = require("node:test"),
+  assert = require("node:assert/strict"),
+  fs = require("node:fs"),
+  os = require("node:os"),
+  path = require("node:path");
+const { FleetAgent } = require("../app/lib/fleet-agent.cjs");
+const { Store } = require("../app/lib/store.cjs");
+const { DEFAULT_CALIBRATION } = require("../app/lib/domain.cjs");
+const { groupAllowed, discoverFromAX } = require("../app/lib/discovery.cjs");
+const context = (name) => ({
+  sessionId: "session_item_" + name,
+  expectedTitle: name,
+  windowId: 1,
+  kind: "private",
+  calibration: DEFAULT_CALIBRATION,
+});
+function fixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "huixiang-fleet-"));
+  const store = new Store(dir);
+  store.settings({
+    ...store.data.settings,
+    mode: "auto",
+    model: { baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6" },
+  });
+  let rows = [
+      { id: "session_item_甲", name: "甲", signature: "old", time: "01:00" },
+      { id: "session_item_乙", name: "乙", signature: "old", time: "01:00" },
+    ],
+    active = context("甲");
+  let sendNames = [];
+  const native = {
+    cancelSends() {},
+    async request(cmd, p) {
+      if (cmd === "permissions") return { accessibility: true, screen: true };
+      if (cmd === "discover")
+        return { sessions: structuredClone(rows), active };
+      if (cmd === "select-session") {
+        active = context(p.id.slice("session_item_".length));
+        return { active };
+      }
+      if (cmd === "capture")
+        return {
+          width: 1000,
+          height: 800,
+          lines: [
+            {
+              text: active.expectedTitle,
+              box: { x: 0.35, y: 0.03, w: 0.1, h: 0.03 },
+            },
+            { text: "你好", box: { x: 0.35, y: 0.3, w: 0.15, h: 0.04 } },
+          ],
+        };
+      throw new Error("unexpected " + cmd);
+    },
+  };
+  const agent = new FleetAgent({
+    store,
+    native,
+    idleTime: () => 10,
+    getKey: async () => "",
+    notify() {},
+  });
+  agent.intelligence = () => ({
+    async decide(messages, memory) {
+      return {
+        action: "ask",
+        reply: "您想咨询什么服务？",
+        reason: "澄清需求",
+        sourceNames: [],
+        summary: messages.at(-1).text,
+        canAuto: true,
+      };
+    },
+  });
+  agent.deliver = async () => {
+    sendNames.push(agent.context.expectedTitle);
+    agent.draft = null;
+    return { confirmed: true };
+  };
+  t.after(() => {
+    agent.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return { store, agent, rows, sendNames, native };
+}
+test("启动自动发现列表，不补发旧消息；私聊之间自动轮询", async (t) => {
+  const f = fixture(t);
+  await f.agent.start();
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, []);
+  f.rows[0].signature = "new-a";
+  f.rows[1].signature = "new-b";
+  await f.agent.tick();
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲", "乙"]);
+  assert.ok(f.store.memoryFor("session_item_甲").messages.length);
+  assert.equal(f.store.memoryFor("session_item_乙").summary, "你好");
+});
+test("需要人工的聊天进入待办，其他聊天继续处理", async (t) => {
+  const f = fixture(t);
+  f.agent.intelligence = () => ({
+    async decide() {
+      return {
+        action: "handoff",
+        reply: "请同事确认",
+        reason: "需核对",
+        sourceNames: [],
+        summary: "",
+        canAuto: false,
+      };
+    },
+  });
+  await f.agent.start();
+  f.rows[0].signature = "new-a";
+  f.rows[1].signature = "new-b";
+  await f.agent.tick();
+  await f.agent.tick();
+  assert.equal(f.agent.tasks.length, 2);
+  assert.equal(f.agent.running, true);
+  assert.deepEqual(f.sendNames, []);
+});
+test("群聊触发范围及未知类型不会误回复", () => {
+  const settings = {
+    reception: {
+      privateChats: true,
+      groupChats: true,
+      groupPolicy: "mentions",
+      mentionName: "小明",
+    },
+  };
+  assert.equal(
+    groupAllowed({ kind: "group" }, { last: { text: "大家好" } }, settings),
+    false,
+  );
+  assert.equal(
+    groupAllowed(
+      { kind: "group" },
+      { last: { text: "@小明 请问周末营业吗" } },
+      settings,
+    ),
+    true,
+  );
+  assert.equal(
+    groupAllowed({ kind: "unknown" }, { last: { text: "@小明" } }, settings),
+    false,
+  );
+  settings.reception.groupPolicy = "all";
+  assert.equal(
+    groupAllowed({ kind: "group" }, { last: { text: "大家好" } }, settings),
+    true,
+  );
+});
+test("发现结构自动提取原生微信会话与输入位置，过滤系统会话", () => {
+  const item = (id, value, x, y, w, h) => ({
+    id,
+    value,
+    frame: { x, y, w, h },
+  });
+  const d = discoverFromAX({
+    windowId: 8,
+    pid: 1,
+    frame: { x: 0, y: 0, w: 1000, h: 800 },
+    items: [
+      item("session_list", "", 60, 80, 250, 700),
+      item("session_item_甲", "甲\n你好\n12:00", 60, 90, 250, 70),
+      item("session_item_公众号", "公众号\n新闻\n12:00", 60, 160, 250, 70),
+      item("current_chat_name_label", "甲", 340, 20, 120, 30),
+      item("chat_message_list", "", 310, 90, 680, 480),
+      item("chat_input_field", "", 320, 620, 650, 130),
+      item("voip_button", "语音通话", 900, 20, 30, 30),
+    ],
+  });
+  assert.equal(d.sessions.length, 1);
+  assert.equal(d.active.expectedTitle, "甲");
+  assert.equal(d.active.kind, "private");
+  assert.equal(d.active.windowId, 8);
+});
+test("模型等待时取消接待，不会生成或发送过期方案", async (t) => {
+  const f = fixture(t);
+  let release, entered;
+  const enteredPromise = new Promise((r) => (entered = r)),
+    wait = new Promise((r) => (release = r));
+  f.agent.intelligence = () => ({
+    async decide() {
+      entered();
+      await wait;
+      return { action: "ask", reply: "你好", sourceNames: [], canAuto: true };
+    },
+  });
+  await f.agent.start();
+  f.rows[0].signature = "new";
+  const running = f.agent.tick();
+  await enteredPromise;
+  f.agent.stop();
+  release();
+  await running;
+  assert.deepEqual(f.sendNames, []);
+  assert.equal(f.agent.running, false);
+});
+test("在其他应用操作不会吞掉当前会话的新消息", async (t) => {
+  const f = fixture(t);
+  f.agent.idleTime = () => 0;
+  f.native.backgroundCapable = true;
+  f.native.control = { isWeChatActive: () => false };
+  await f.agent.start();
+  f.rows[0].signature = "new-while-working";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("点进微信暂停处理，离开微信后保持接待并继续", async (t) => {
+  const f = fixture(t);
+  let active = false;
+  f.native.backgroundCapable = true;
+  f.native.control = { isWeChatActive: () => active };
+  await f.agent.start();
+  active = true;
+  f.agent.setActivityPaused(true);
+  f.rows[0].signature = "new-paused";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, []);
+  assert.equal(f.agent.running, true);
+  active = false;
+  f.agent.setActivityPaused(false);
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("手动提炼当前聊天只读取和保存核心，不发送微信消息", async (t) => {
+  const f = fixture(t);
+  f.agent.intelligence = () => ({
+    summarize: async (messages) => {
+      assert.equal(messages.at(-1).text, "你好");
+      return {
+        action: "wait",
+        conversationFinished: false,
+        conversationReport: {
+          core: "互相打招呼",
+          intent: "未明确",
+          nextSteps: [],
+          ownerTodo: [],
+        },
+      };
+    },
+  });
+  await f.agent.summarizeCurrent();
+  assert.deepEqual(f.sendNames, []);
+  assert.equal(f.store.reports()[0].core, "互相打招呼");
+  assert.equal(f.agent.busy, false);
+});

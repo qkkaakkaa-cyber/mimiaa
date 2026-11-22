@@ -8,10 +8,28 @@ const DEFAULT_CALIBRATION = {
 };
 const DEFAULT_SETTINGS = {
   mode: "assist",
+  personality: { preset: "warm", custom: "", learnFromHistory: false },
+  away: {
+    enabled: false,
+    greeting:
+      "老板在睡觉，我是他的 AI 助理。有啥事儿可以先和我说，等他醒了，我提醒他回复你。你也可以先问我，想点子或者随便聊聊都行。你找他是有什么事儿？",
+    sessionId: "",
+  },
+  jobSource: { enabled: false, site: "https://thaichinesejobs.com" },
+  reception: {
+    privateChats: true,
+    groupChats: true,
+    groupPolicy: "mentions",
+    mentionName: "",
+    excluded: [],
+  },
   interval: 8,
   expectedTitle: "",
   windowId: null,
   business: "",
+  persona: "自然、专业、懂业务的客户顾问",
+  goal: "了解客户需求，准确回答业务问题，推进预约或人工跟进",
+  rememberConversations: true,
   model: { baseUrl: "", name: "" },
   rules: { confirmPromises: true, pauseOnActivity: true },
   calibration: DEFAULT_CALIBRATION,
@@ -66,15 +84,62 @@ function validateSettings(input) {
   if (baseUrl) validateEndpoint(baseUrl);
   return {
     mode,
+    personality: {
+      preset: ["warm", "witty", "direct", "steady"].includes(
+        input.personality?.preset,
+      )
+        ? input.personality.preset
+        : "warm",
+      custom: String(input.personality?.custom || "").slice(0, 2000),
+      learnFromHistory: input.personality?.learnFromHistory === true,
+    },
+    away: {
+      enabled: input.away?.enabled === true,
+      greeting: String(input.away?.greeting || DEFAULT_SETTINGS.away.greeting)
+        .trim()
+        .slice(0, 500),
+      sessionId: String(input.away?.sessionId || "")
+        .replace(/[^a-zA-Z0-9-]/g, "")
+        .slice(0, 80),
+    },
+    jobSource: {
+      enabled: input.jobSource?.enabled === true,
+      site: "https://thaichinesejobs.com",
+    },
+    reception: {
+      privateChats: input.reception?.privateChats !== false,
+      groupChats: input.reception?.groupChats !== false,
+      groupPolicy: ["mentions", "questions", "all"].includes(
+        input.reception?.groupPolicy,
+      )
+        ? input.reception.groupPolicy
+        : "mentions",
+      mentionName: String(input.reception?.mentionName || "")
+        .trim()
+        .slice(0, 100),
+      excluded: (Array.isArray(input.reception?.excluded)
+        ? input.reception.excluded
+        : []
+      )
+        .map((v) => String(v).trim().slice(0, 100))
+        .filter(Boolean)
+        .slice(0, 100),
+    },
     interval: Math.max(6, Math.min(60, Number(input.interval) || 8)),
     expectedTitle: String(input.expectedTitle || "")
       .trim()
       .slice(0, 100),
     windowId,
     business: String(input.business || "").slice(0, 12000),
+    persona: String(input.persona || DEFAULT_SETTINGS.persona).slice(0, 1000),
+    goal: String(input.goal || DEFAULT_SETTINGS.goal).slice(0, 1000),
+    rememberConversations: input.rememberConversations !== false,
     model: {
       baseUrl,
       name: String(input.model?.name || "")
+        .trim()
+        .slice(0, 150),
+      visionName: String(input.model?.visionName || input.model?.name || "")
         .trim()
         .slice(0, 150),
     },
@@ -119,15 +184,26 @@ function verifyTitle(lines, expected, calibration) {
     });
 }
 function parseSnapshot(capture, settings) {
+  if (capture.calibration)
+    settings = { ...settings, calibration: capture.calibration };
   const region = settings.calibration.messages;
   const all = capture.lines
-    .filter((l) => within(l.box, region))
+    .filter(
+      (l) =>
+        within(l.box, region) &&
+        !within(l.box, settings.calibration.composer) &&
+        !within(l.box, settings.calibration.title),
+    )
     .sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
   const messages = [];
   for (const line of all) {
     const text = String(line.text || "").trim();
     if (
       !text ||
+      /^(?:发送|发送S|Send|长按触控板\s*语音输入|输入消息)$/iu.test(text) ||
+      /^(?:WeChat转账|微信转账|微信红包|已收款|已被接收|￥[\d,.]+(?:\s*(?:已收款|已被接收))?)$/iu.test(
+        text,
+      ) ||
       /^(?:\d{1,2}:\d{2}|今天|昨天|星期[一二三四五六日天]|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|以下为新消息|以上是打招呼的内容)[\s\d:]*$/u.test(
         text,
       )
@@ -139,7 +215,7 @@ function parseSnapshot(capture, settings) {
         ? "unknown"
         : line.outgoing
           ? "out"
-          : left < 0.23
+          : left < 0.35
             ? "in"
             : "unknown";
     const last = messages.at(-1);
@@ -155,11 +231,18 @@ function parseSnapshot(capture, settings) {
       messages.push({
         role,
         text,
+        ...(line.mediaType
+          ? { mediaType: line.mediaType, transcribed: line.transcribed }
+          : {}),
         x: line.box.x,
         bottom: line.box.y + line.box.h,
       });
   }
-  const canonical = messages.map(({ role, text }) => ({ role, text }));
+  const canonical = messages.map(({ role, text, mediaType, transcribed }) => ({
+    role,
+    text,
+    ...(mediaType ? { mediaType, transcribed } : {}),
+  }));
   return {
     titleVerified: verifyTitle(
       capture.lines,
@@ -255,4 +338,5 @@ module.exports = {
   matchFAQ,
   planReply,
   validateFAQ,
+  requiresConfirmation,
 };

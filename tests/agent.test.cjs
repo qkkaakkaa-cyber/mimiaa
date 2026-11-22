@@ -85,6 +85,43 @@ test("草稿之后客户有新消息时拒绝发送", async (t) => {
   assert.equal(fake.sends, 0);
   assert.equal(store.data.ledger.length, 0);
 });
+test("微信延迟显示已发气泡时只重复读回，不重复发送", async (t) => {
+  const { agent, fake, store } = fixture(t);
+  const request = fake.request.bind(fake);
+  let delayed,
+    reads = 0;
+  fake.request = async (cmd, payload) => {
+    if (cmd === "send") {
+      fake.sends++;
+      delayed = line(payload.text, 0.5, true);
+      return { attempted: true };
+    }
+    if (cmd === "capture" && delayed && ++reads === 2)
+      fake.current.lines.push(delayed);
+    return request(cmd, payload);
+  };
+  await agent.generate();
+  assert.equal((await agent.send("您好，欢迎咨询")).confirmed, true);
+  assert.equal(fake.sends, 1);
+  assert.equal(store.data.ledger[0].status, "confirmed");
+});
+test("辅助功能统一全角标点后仍能确认实际已发中文回复", async (t) => {
+  const { agent, fake } = fixture(t);
+  const request = fake.request.bind(fake);
+  fake.request = async (cmd, payload) =>
+    request(
+      cmd,
+      cmd === "send"
+        ? { ...payload, text: payload.text.normalize("NFKC") }
+        : payload,
+    );
+  await agent.generate();
+  assert.equal(
+    (await agent.send("你好，我在呢！想聊些什么？")).confirmed,
+    true,
+  );
+  assert.equal(fake.sends, 1);
+});
 test("聊天对象变化时不发送，并停止自动接待", async (t) => {
   const { agent, fake } = fixture(t);
   await agent.start();
@@ -184,4 +221,23 @@ test("工作空间持久化保留设置与问答", (t) => {
     fs.statSync(path.join(dir, "workspace.json")).mode & 0o777,
     0o600,
   );
+});
+test("原生组件确认尚未输入或发送时，可取消本次账本并保留接待", async (t) => {
+  const { agent, fake, store } = fixture(t);
+  await agent.generate();
+  agent.running = true;
+  const original = fake.request.bind(fake);
+  fake.request = async (cmd, p) => {
+    if (cmd === "send") {
+      const e = new Error("客户消息发生变化，已取消发送");
+      e.sendAttempted = false;
+      e.canRetry = true;
+      throw e;
+    }
+    return original(cmd, p);
+  };
+  await assert.rejects(() => agent.send("您好"), /客户消息发生变化/);
+  assert.equal(store.data.ledger[0].status, "cancelled");
+  assert.equal(store.attempted(store.data.ledger[0].key), false);
+  assert.equal(agent.running, true);
 });

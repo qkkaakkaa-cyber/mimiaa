@@ -42,7 +42,7 @@ class NativeBridge {
       process.on("error", () =>
         fail("本机微信组件不可用，请使用完整的 macOS 安装包"),
       );
-      process.on("close", () => {
+      process.on("close", (exitCode, signal) => {
         this.sending.delete(process);
         if (settled) return;
         settled = true;
@@ -52,7 +52,17 @@ class NativeBridge {
           if (!result.ok) reject(new Error(result.error || "操作失败"));
           else resolve(result.data);
         } catch {
-          reject(new Error("本机组件返回异常，请重新打开软件"));
+          const detail =
+            signal ||
+            (Number.isInteger(exitCode) ? "退出码 " + exitCode : "无响应");
+          const error = new Error(
+            `本机${command === "capture" ? "截图" : "微信"}组件意外退出（${detail}），已停止本次操作。`,
+          );
+          error.code = "NATIVE_PROCESS_EXIT";
+          error.command = command;
+          error.exitCode = exitCode;
+          error.signal = signal;
+          reject(error);
         }
       });
       process.stdin.on("error", () => {});

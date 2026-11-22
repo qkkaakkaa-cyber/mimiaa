@@ -3,6 +3,7 @@ import AppKit
 import ScreenCaptureKit
 import Vision
 import ApplicationServices
+import PDFKit
 
 struct BridgeError: LocalizedError {
     var message: String
@@ -41,6 +42,7 @@ func listedWindows() -> [[String:Any]] {
 }
 struct Shot { let image:CGImage;let window:SCWindow;let lines:[[String:Any]] }
 @available(macOS 14.0, *)
+@MainActor
 func shot(_ id: CGWindowID) async throws -> Shot {
     guard CGPreflightScreenCaptureAccess() else {throw BridgeError("需要屏幕录制权限，请在系统设置中为回响开启")}
     let content=try await SCShareableContent.excludingDesktopWindows(true,onScreenWindowsOnly:true)
@@ -87,116 +89,46 @@ func titleMatches(_ lines:[[String:Any]],_ expected:String,_ region:Region)->Boo
         return seen==target || stripped==target
     }
 }
-func existingDraft(_ lines:[[String:Any]],_ region:Region)->Bool {
-    lines.contains { line in
-        guard let box=line["box"] as? [String:Double],region.contains(box),let text=line["text"] as? String else{return false}
-        return !["发送","发送S","Send","输入消息","输入文字"].contains(text.trimmingCharacters(in:.whitespacesAndNewlines))
-    }
-}
-func regionText(_ lines:[[String:Any]],_ region:Region)->[String] {
-    lines.filter { line in
-        guard let box=line["box"] as? [String:Double] else{return false}
-        return region.contains(box)
-    }.sorted { a,b in
-        let x=a["box"] as! [String:Double],y=b["box"] as! [String:Double]
-        return x["y"]! == y["y"]! ? x["x"]! < y["x"]! : x["y"]! < y["y"]!
-    }.compactMap{$0["text"] as? String}.map(normalized)
-}
-func raiseWindow(_ target:SCWindow) throws {
-    guard AXIsProcessTrusted() else{throw BridgeError("需要辅助功能权限，请在系统设置中为回响开启")}
-    guard let pid=target.owningApplication?.processID,isWeChat(pid),let running=NSRunningApplication(processIdentifier:pid) else{throw BridgeError("微信进程不可用")}
-    let app=AXUIElementCreateApplication(pid)
-    var raw:CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app,kAXWindowsAttribute as CFString,&raw) == .success,let windows=raw as? [AXUIElement] else {throw BridgeError("无法定位微信窗口，请检查辅助功能授权")}
-    var chosen:AXUIElement?
-    for window in windows {
-        var p:CFTypeRef?,s:CFTypeRef?;AXUIElementCopyAttributeValue(window,kAXPositionAttribute as CFString,&p);AXUIElementCopyAttributeValue(window,kAXSizeAttribute as CFString,&s)
-        guard let p,let s,CFGetTypeID(p)==AXValueGetTypeID(),CFGetTypeID(s)==AXValueGetTypeID() else{continue}
-        var point=CGPoint.zero,size=CGSize.zero
-        AXValueGetValue(p as! AXValue,.cgPoint,&point);AXValueGetValue(s as! AXValue,.cgSize,&size)
-        if abs(point.x-target.frame.minX)<3 && abs(point.y-target.frame.minY)<3 && abs(size.width-target.frame.width)<3 && abs(size.height-target.frame.height)<3 {chosen=window;break}
-    }
-    guard let chosen else{throw BridgeError("选定的微信窗口位置已改变，请重新读取")}
-    running.activate(options:[.activateAllWindows])
-    guard AXUIElementPerformAction(chosen,kAXRaiseAction as CFString) == .success else{throw BridgeError("无法激活选定的微信窗口")}
-}
-func clickAt(_ point:CGPoint) throws {
-    guard let down=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:point,mouseButton:.left),let up=CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:point,mouseButton:.left) else{throw BridgeError("无法创建鼠标事件")}
-    down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
-}
-func typeText(_ value:String) throws {
-    var chunks:[String]=[],buffer=""
-    for character in value {if buffer.utf16.count+String(character).utf16.count>16 {chunks.append(buffer);buffer=""};buffer.append(character)}
-    if !buffer.isEmpty {chunks.append(buffer)}
-    for chunk in chunks {
-    let chars=Array(chunk.utf16)
-    // A single Unicode event preserves emoji surrogate pairs and never touches the clipboard.
-    guard let down=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:true),let up=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:false) else{throw BridgeError("无法创建输入事件")}
-    chars.withUnsafeBufferPointer { ptr in
-        down.keyboardSetUnicodeString(stringLength:chars.count,unicodeString:ptr.baseAddress)
-        up.keyboardSetUnicodeString(stringLength:chars.count,unicodeString:ptr.baseAddress)
-    }
-    down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
-    Thread.sleep(forTimeInterval:0.025)
-    }
-}
-@available(macOS 14.0, *)
-func send(_ payload:[String:Any]) async throws -> [String:Any] {
-    guard let id=payload["windowId"] as? UInt32,let expected=payload["expectedTitle"] as? String,!expected.isEmpty,
-          let text=payload["text"] as? String,!text.isEmpty,text.count<=1500,!text.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains),
-          let c=payload["calibration"] as? [String:Any],let input=c["input"] as? [String:Double],let ix=input["x"],let iy=input["y"] else{throw BridgeError("发送参数不完整")}
-    let title=try Region(c["title"]),composer=try Region(c["composer"]),messages=try Region(c["messages"])
-    guard let expectedOCR=payload["expectedOCR"] as? [String],!expectedOCR.isEmpty else{throw BridgeError("缺少发送前的消息校验记录")}
-    let expectedSignature=expectedOCR.map(normalized)
-    guard ix>=composer.x,ix<=composer.x+composer.w,iy>=composer.y,iy<=composer.y+composer.h else{throw BridgeError("输入位置不在已标记的输入框内")}
-    if payload["automatic"] as? Bool == true && CGEventSource.secondsSinceLastEventType(.combinedSessionState,eventType:CGEventType(rawValue:UInt32.max)!)<5 {throw BridgeError("检测到人工操作，自动发送已取消")}
-    let before=try await shot(id)
-    guard titleMatches(before.lines,expected,title) else{throw BridgeError("聊天对象变化，已取消发送")}
-    guard regionText(before.lines,messages)==expectedSignature else{throw BridgeError("客户消息发生变化，已取消发送")}
-    guard let width=payload["width"] as? Int,let height=payload["height"] as? Int,abs(width-before.image.width)<3,abs(height-before.image.height)<3 else{throw BridgeError("微信窗口尺寸变化，请重新标记区域")}
-    guard !existingDraft(before.lines,composer) else{throw BridgeError("微信输入框里已有内容，请先自行处理草稿")}
-    try raiseWindow(before.window);try await Task.sleep(for:.milliseconds(450))
-    let verified=try await shot(id)
-    guard titleMatches(verified.lines,expected,title),!existingDraft(verified.lines,composer) else{throw BridgeError("发送前核对未通过，请重新读取会话")}
-    guard regionText(verified.lines,messages)==expectedSignature else{throw BridgeError("客户有新消息，已取消发送")}
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier==verified.window.owningApplication?.processID else{throw BridgeError("微信没有获得焦点，已取消发送")}
-    let point=CGPoint(x:verified.window.frame.minX+ix*verified.window.frame.width,y:verified.window.frame.minY+iy*verified.window.frame.height)
-    try clickAt(point);try await Task.sleep(for:.milliseconds(180))
-    var focused:CFTypeRef?,value:CFTypeRef?
-    let axApp=AXUIElementCreateApplication(verified.window.owningApplication!.processID)
-    if AXUIElementCopyAttributeValue(axApp,kAXFocusedUIElementAttribute as CFString,&focused) == .success,let focused,CFGetTypeID(focused)==AXUIElementGetTypeID() {
-        AXUIElementCopyAttributeValue(focused as! AXUIElement,kAXValueAttribute as CFString,&value)
-        if let existing=value as? String,!existing.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {throw BridgeError("输入框已有草稿，已取消发送")}
-    }
-    try typeText(text);try await Task.sleep(for:.milliseconds(250))
-    let typed=try await shot(id)
-    guard titleMatches(typed.lines,expected,title),regionText(typed.lines,messages)==expectedSignature else{throw BridgeError("发送前会话变化，请到微信检查草稿")}
-    let composed=regionText(typed.lines,composer).filter{!["发送","发送s","send"].contains($0)}.joined()
-    guard composed==normalized(text) else{throw BridgeError("未能确认输入框中的回复，请到微信检查草稿")}
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier==verified.window.owningApplication?.processID else{throw BridgeError("发送前焦点发生变化，请到微信检查草稿")}
-    guard let down=CGEvent(keyboardEventSource:nil,virtualKey:36,keyDown:true),let up=CGEvent(keyboardEventSource:nil,virtualKey:36,keyDown:false) else{throw BridgeError("无法创建发送事件")}
-    down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
-    try await Task.sleep(for:.milliseconds(700));return ["attempted":true]
-}
 @main struct Main {
+    @MainActor
     static func main() async {
+        // ScreenCaptureKit's window/display filter requires a WindowServer
+        // connection and must be initialized on the main actor in a CLI helper.
         do {
             let command=CommandLine.arguments.dropFirst().first ?? "help"
+            if command=="capture" {
+                let application=NSApplication.shared
+                application.setActivationPolicy(.prohibited)
+            }
             let data=FileHandle.standardInput.readDataToEndOfFile()
             let payload=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] ?? [:]
             var result:[String:Any]=[:]
             switch command {
-            case "permissions":result=["screen":CGPreflightScreenCaptureAccess(),"accessibility":AXIsProcessTrusted()]
+            case "permissions":result=["screen":CGPreflightScreenCaptureAccess()]
             case "request-screen":result=["granted":CGRequestScreenCaptureAccess()]
-            case "request-accessibility":
-                let options=[kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:true] as CFDictionary
-                result=["granted":AXIsProcessTrustedWithOptions(options)]
             case "windows":result=["windows":listedWindows()]
+            case "extract-document":
+                guard let path=payload["path"] as? String,path.lowercased().hasSuffix(".pdf"),let document=PDFDocument(url:URL(fileURLWithPath:path)) else{throw BridgeError("无法读取该 PDF 文档")}
+                let text=(0..<document.pageCount).compactMap{document.page(at:$0)?.string}.joined(separator:"\n\n")
+                result=["text":String(text.prefix(80000))]
             case "capture":
                 guard let id=payload["windowId"] as? UInt32 else{throw BridgeError("请选择微信窗口")}
                 let shot=try await shot(id);let png=NSBitmapImageRep(cgImage:shot.image).representation(using:.png,properties:[:])!
-                result=["windowId":id,"width":shot.image.width,"height":shot.image.height,"image":png.base64EncodedString(),"lines":shot.lines]
-            case "send":result=try await send(payload)
+                let frame=shot.window.frame
+                result=["windowId":id,"width":shot.image.width,"height":shot.image.height,"image":png.base64EncodedString(),"lines":shot.lines,
+                        "window":["pid":shot.window.owningApplication!.processID,"frame":["x":frame.minX,"y":frame.minY,"w":frame.width,"h":frame.height]]]
+            case "ocr-image":
+                guard let base64=payload["image"] as? String,let data=Data(base64Encoded:base64),let rep=NSBitmapImageRep(data:data),let image=rep.cgImage else{throw BridgeError("无法读取本机截图")}
+                let request=VNRecognizeTextRequest();request.recognitionLevel = .accurate
+                request.recognitionLanguages=["zh-Hans","zh-Hant","en-US"];request.usesLanguageCorrection=false
+                try VNImageRequestHandler(cgImage:image,options:[:]).perform([request])
+                let lines=(request.results ?? []).compactMap { observation -> [String:Any]? in
+                    guard let text=observation.topCandidates(1).first,text.confidence>=0.45 else{return nil}
+                    let b=observation.boundingBox
+                    let rect:[String:Double]=["x":b.minX,"y":1-b.maxY,"w":b.width,"h":b.height]
+                    return ["text":text.string,"confidence":text.confidence,"box":rect,"outgoing":greenBackground(image,rect)]
+                }
+                result=["lines":lines]
             case "self-test":
                 let r=try Region(["x":0.3,"y":0.01,"w":0.6,"h":0.1])
                 guard titleMatches([["text":"测试客户（2）","box":["x":0.4,"y":0.03,"w":0.1,"h":0.02]]],"测试客户",r),
