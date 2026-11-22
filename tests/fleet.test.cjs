@@ -241,8 +241,9 @@ test("手动提炼当前聊天只读取和保存核心，不发送微信消息",
       };
     },
   });
-  await f.agent.summarizeCurrent();
+  const result = await f.agent.summarizeCurrent();
   assert.deepEqual(f.sendNames, []);
   assert.equal(f.store.reports()[0].core, "互相打招呼");
   assert.equal(f.agent.busy, false);
+  assert.equal(result.busy, false);
 });

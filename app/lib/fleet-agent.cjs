@@ -408,7 +408,6 @@ class FleetAgent extends Agent {
       if (ticket !== this.epoch) throw new Error("操作已暂停，本次总结取消");
       this.store.conversationReport(this.context, snapshot, decision);
       this.status = "核心总结已保存到记录，未向对方发消息";
-      return this.state();
     } catch (error) {
       this.status = "总结未完成：" + error.message;
       this.store.log("warning", this.status);
@@ -418,6 +417,7 @@ class FleetAgent extends Agent {
       this.emit();
       this.schedule();
     }
+    return this.state();
   }
   async retryCurrent(options = {}) {
     if (options.confirmedPrepared && !this.running) await this.start();
