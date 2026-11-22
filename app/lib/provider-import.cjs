@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const { validateEndpoint } = require("./domain.cjs");
 function reusableKimiConfig(source) {
   const section =
     source.match(/^\[app\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1] ||
@@ -26,12 +27,22 @@ function reusableKimiConfig(source) {
     model: { baseUrl, name: "kimi-k2.6", visionName: "kimi-k2.6" },
   };
 }
-async function importProvider({ file, store, safeStorage }) {
-  if (!fs.existsSync(file)) return null;
+function readProviderReference(file) {
   const ref = JSON.parse(fs.readFileSync(file, "utf8"));
   if (ref.provider !== "moonshot" || typeof ref.sourcePath !== "string")
     throw new Error("接口导入来源无效");
-  const config = reusableKimiConfig(fs.readFileSync(ref.sourcePath, "utf8"));
+  return reusableKimiConfig(fs.readFileSync(ref.sourcePath, "utf8"));
+}
+function referencedProviderKey(file, base) {
+  if (!fs.existsSync(file)) return "";
+  const config = readProviderReference(file);
+  return validateEndpoint(config.model.baseUrl) === validateEndpoint(base)
+    ? config.key
+    : "";
+}
+async function importProvider({ file, store, safeStorage }) {
+  if (!fs.existsSync(file)) return null;
+  const config = readProviderReference(file);
   if (
     store.data.settings.model.baseUrl &&
     store.data.settings.model.baseUrl !== config.model.baseUrl
@@ -49,4 +60,4 @@ async function importProvider({ file, store, safeStorage }) {
   }
   return { key: config.key, persisted };
 }
-module.exports = { reusableKimiConfig, importProvider };
+module.exports = { reusableKimiConfig, referencedProviderKey, importProvider };

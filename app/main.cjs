@@ -19,7 +19,11 @@ const { Store } = require("./lib/store.cjs");
 const { NativeBridge } = require("./lib/native.cjs");
 const { FleetAgent: Agent } = require("./lib/fleet-agent.cjs");
 const { MacControlBridge } = require("./lib/mac-control.cjs");
-const { importProvider } = require("./lib/provider-import.cjs");
+const {
+  importProvider,
+  referencedProviderKey,
+} = require("./lib/provider-import.cjs");
+const { validateEndpoint } = require("./lib/domain.cjs");
 const { readBusinessDocument } = require("./lib/documents.cjs");
 app.setName("回响");
 const single = app.requestSingleInstanceLock();
@@ -28,14 +32,29 @@ let window,
   store,
   agent,
   native,
-  sessionKey = "";
+  sessionKey = "",
+  sessionKeyBase = "";
 const uiFile = path.join(__dirname, "renderer/index.html");
 const nativeBinary = app.isPackaged
   ? path.join(process.resourcesPath, "native/HuixiangBridge")
   : path.join(__dirname, "../native/bin/HuixiangBridge");
-async function key() {
-  if (sessionKey) return sessionKey;
+function providerReferenceFile() {
+  return path.join(store.dir, "provider-source.json");
+}
+async function key(base) {
+  if (sessionKey && sessionKeyBase === base) return sessionKey;
+  if (fs.existsSync(providerReferenceFile())) {
+    try {
+      const sourcedKey = referencedProviderKey(providerReferenceFile(), base);
+      if (sourcedKey) return sourcedKey;
+    } catch {
+      // The original config may have moved. The encrypted credential can
+      // still be used independently of that file.
+    }
+  }
   if (!store.data.encryptedKey) return "";
+  if (store.data.encryptedKeyBase && store.data.encryptedKeyBase !== base)
+    return "";
   try {
     const buffer = Buffer.from(store.data.encryptedKey, "base64");
     if (safeStorage.decryptStringAsync) {
@@ -52,12 +71,14 @@ async function key() {
         ]);
         sessionKey =
           typeof decrypted === "string" ? decrypted : decrypted.result;
+        sessionKeyBase = base;
         return sessionKey;
       } finally {
         clearTimeout(timer);
       }
     }
     sessionKey = safeStorage.decryptString(buffer);
+    sessionKeyBase = base;
     return sessionKey;
   } catch {
     throw new Error("无法解锁已保存的模型密钥，请在回复规则中重新填写");
@@ -227,6 +248,10 @@ function register() {
     const plain = String(value || "").trim();
     if (plain.length > 2000) throw new Error("密钥过长");
     sessionKey = plain;
+    sessionKeyBase = store.data.settings.model.baseUrl
+      ? validateEndpoint(store.data.settings.model.baseUrl)
+      : "";
+    fs.rmSync(providerReferenceFile(), { force: true });
     if (!plain) {
       store.data.encryptedKey = "";
       store.flush();
@@ -244,6 +269,7 @@ function register() {
       ? await safeStorage.encryptStringAsync(plain)
       : safeStorage.encryptString(plain);
     store.data.encryptedKey = Buffer.from(encrypted).toString("base64");
+    store.data.encryptedKeyBase = sessionKeyBase;
     store.flush();
     return { persisted: true };
   });
@@ -277,7 +303,10 @@ app
         store,
         safeStorage,
       });
-      if (imported) sessionKey = imported.key;
+      if (imported) {
+        sessionKey = imported.key;
+        sessionKeyBase = validateEndpoint(store.data.settings.model.baseUrl);
+      }
     } catch (error) {
       store.log("warning", "AI 接口自动配置未完成，请检查模型设置。");
     }

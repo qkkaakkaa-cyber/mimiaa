@@ -153,7 +153,7 @@ class Intelligence {
     const base = validateEndpoint(model.baseUrl);
     const name = vision ? model.visionName || model.name : model.name;
     if (!name) throw new Error("AI 模型尚未配置");
-    const key = await this.getKey();
+    const key = await this.getKey(base);
     const moonshot =
       new URL(base).hostname.endsWith(".moonshot.cn") ||
       new URL(base).hostname.endsWith(".moonshot.ai");

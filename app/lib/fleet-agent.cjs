@@ -189,6 +189,18 @@ class FleetAgent extends Agent {
     const d = await this.discover();
     this.seen = new Map(d.sessions.map((s) => [s.id, s.signature]));
     this.queue.clear();
+    for (const row of d.sessions) {
+      const pending = this.store.data.modelRetries[row.id];
+      if (
+        pending &&
+        Date.now() - pending.failedAt < 30 * 60 * 1000 &&
+        !this.excluded(row)
+      )
+        this.queue.set(row.id, {
+          ...row,
+          retryFingerprint: pending.fingerprint,
+        });
+    }
     this.startedAt = Date.now();
     this.context = null;
     this.draft = null;
@@ -286,6 +298,14 @@ class FleetAgent extends Agent {
       if (!snapshot.titleVerified)
         throw new Error("无法核对当前聊天标题，已停止");
       this.latest = snapshot;
+      if (
+        row.retryFingerprint &&
+        row.retryFingerprint !== snapshot.fingerprint
+      ) {
+        this.store.rememberModelRetry(row.id, null);
+        this.status = "先前未回复的消息已变化，等待新消息";
+        return;
+      }
       if (snapshot.last?.mediaType === "voice" && !snapshot.last.transcribed) {
         this.status = "收到语音，需先完成微信转文字";
         this.tasks.unshift({
@@ -322,12 +342,35 @@ class FleetAgent extends Agent {
         this.status = "等待下一条客户消息";
         return;
       }
-      const plan = await this.planSnapshot(snapshot, ticket);
+      let plan;
+      try {
+        plan = await this.planSnapshot(snapshot, ticket);
+      } catch (error) {
+        if (!this.running || ticket !== this.epoch) return;
+        this.store.rememberModelRetry(row.id, {
+          fingerprint: snapshot.fingerprint,
+          failedAt: Date.now(),
+        });
+        const attempts = (row.modelRetryAttempts || 0) + 1;
+        if (attempts <= 2) {
+          this.queue.set(row.id, {
+            ...row,
+            retryFingerprint: snapshot.fingerprint,
+            modelRetryAttempts: attempts,
+          });
+          this.status = "AI 暂未生成回复，稍后自动重试";
+          this.store.log("warning", error.message);
+          return;
+        }
+        throw error;
+      }
       if (ticket !== this.epoch) return;
       if (this.activityPaused) {
         this.queue.set(row.id, row);
         return;
       }
+      if (this.store.data.modelRetries[row.id])
+        this.store.rememberModelRetry(row.id, null);
       if (plan.kind === "idle") {
         this.status = plan.reason;
         return;

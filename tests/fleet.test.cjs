@@ -247,3 +247,23 @@ test("手动提炼当前聊天只读取和保存核心，不发送微信消息",
   assert.equal(f.agent.busy, false);
   assert.equal(result.busy, false);
 });
+test("AI 凭证暂时不可用，恢复接待后核对并处理同一条消息", async (t) => {
+  const f = fixture(t);
+  await f.agent.start();
+  f.rows[0].signature = "new";
+  const workingModel = f.agent.intelligence;
+  f.agent.intelligence = () => ({
+    decide: async () => {
+      throw new Error("暂时无法读取凭证");
+    },
+  });
+  await f.agent.tick();
+  assert.equal(f.agent.running, true);
+  assert.match(f.agent.status, /稍后自动重试/);
+  assert.deepEqual(f.sendNames, []);
+  await f.agent.start();
+  f.agent.intelligence = workingModel;
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+  assert.deepEqual(f.store.data.modelRetries, {});
+});

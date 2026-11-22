@@ -19,6 +19,7 @@ class Store {
       awayGreetings: {},
       dailyInsights: {},
       conversationReports: [],
+      modelRetries: {},
       events: [],
       ledger: [],
       encryptedKey: "",
@@ -46,11 +47,13 @@ class Store {
   public() {
     const {
       encryptedKey,
+      encryptedKeyBase,
       ledger,
       memories,
       awayGreetings,
       dailyInsights,
       conversationReports,
+      modelRetries,
       ...data
     } = this.data;
     return structuredClone({ ...data, hasApiKey: !!encryptedKey });
@@ -264,6 +267,15 @@ class Store {
       time: new Date().toISOString(),
     });
     this.data.events = this.data.events.slice(0, 150);
+    this.flush();
+  }
+  rememberModelRetry(sessionId, entry) {
+    const entries = Object.entries(this.data.modelRetries).filter(
+      ([id, retry]) =>
+        id !== sessionId && Date.now() - retry.failedAt < 30 * 60 * 1000,
+    );
+    if (entry) entries.unshift([sessionId, entry]);
+    this.data.modelRetries = Object.fromEntries(entries.slice(0, 100));
     this.flush();
   }
   attempted(key) {
