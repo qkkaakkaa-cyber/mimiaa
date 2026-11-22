@@ -72,13 +72,17 @@
     calStep = "title",
     selectedWindow = null,
     lastFocus = null,
-    practiceMessages = [];
+    practiceMessages = [],
+    socialRecords = { profiles: [], drafts: [], moments: [] },
+    momentText = "",
+    profileCategory = "全部";
   const titles = {
     inbox: "接待工作台",
     knowledge: "业务知识库",
     rules: "智能体设置",
     channels: "渠道连接",
     logs: "接待记录",
+    wechatTools: "微信工具",
   };
   function notify(text) {
     $("#notice").textContent = text;
@@ -181,7 +185,7 @@
     const s = workspace.settings,
       r = s.reception,
       ready = agent.discovered;
-    return `<div class="assistant-home"><div class="assistant-heading"><span class="assistant-avatar ${agent.running ? "active" : ""}">${icon("wave")}</span><div><h1>${agent.running ? (agent.activityPaused ? "你先用微信，我等一会儿" : "我来照看消息") : "你的 AI 接待同事"}</h1><p>${ready ? "微信已自动连接" : "打开微信，剩下的交给回响"}</p></div><span class="e-tag ${workspace.hasApiKey ? "e-green" : ""}">${workspace.hasApiKey ? "Kimi 已接入" : "AI 待连接"}</span></div><section class="reception-card"><div class="reception-title"><span class="e-dot"></span>${agent.running ? "正在接待" : "准备接待"}<span>${s.mode === "auto" ? "自动发送" : "先准备草稿"}</span></div><h2>聊天还在微信里。<br>AI 在一旁帮你接待。</h2><p>${s.away?.enabled ? "结合聊天上下文自由接话、反问和记留言，闲聊不查业务资料。" : "自动发现新的私聊和群聊，结合上下文与业务资料回复。"}</p><button class="e-button e-primary start-reception" data-action="toggle-run" ${!agent.running && (pending || agent.busy) ? "disabled" : ""}>${icon(agent.running ? "pause" : "play")}${agent.running ? "暂停接待" : "开启微信接待"}</button><div class="reception-footnote">${esc(agent.status)}</div></section><section class="away-card"><div class="e-sectionhead"><div><h2>睡觉代班 · 闲聊</h2><small>${s.away?.enabled ? "老板休息中，AI 替你接话、记事" : "开启后，先说明 AI 身份，再接话和记留言"}</small></div><button class="e-button e-small ${s.away?.enabled ? "e-primary" : ""}" data-action="toggle-away">${s.away?.enabled ? "已开启 · 关闭" : "开启"}</button></div>${s.away?.enabled ? `<p>${esc(s.away.greeting)}</p>` : ""}</section><section class="scope-card"><div class="e-sectionhead"><h2>接待范围</h2><button class="text-button" data-page="rules">调整 ${icon("arrow")}</button></div><div class="scope-chips"><span class="scope-chip ${r.privateChats ? "enabled" : ""}">${icon("chat")}私聊 ${r.privateChats ? "已开启" : "已关闭"}</span><span class="scope-chip ${r.groupChats ? "enabled" : ""}">${icon("windows")}群聊 ${r.groupChats ? { mentions: "@我时", questions: "提问时", all: "全部新消息" }[r.groupPolicy] : "已关闭"}</span></div><div class="assistant-stats"><span><strong>${agent.overview?.privateCount || 0}</strong><small>今日联系人数</small></span><span><strong>${agent.overview?.repliesCount || 0}</strong><small>今日已回复</small></span><span><strong>${agent.tasks?.length || 0}</strong><small>需要你接手</small></span></div></section>${agent.draft ? `<section class="e-section review-card"><div class="e-sectionhead"><h2>${esc(agent.activeTitle || "待确认回复")}</h2><span class="e-tag">人工确认</span></div><textarea class="e-editor" id="reply-input">${esc(reply || agent.draft.text)}</textarea><p>${esc(agent.analysis?.reason || "确认后发送到原生微信")}</p><div class="control-row end"><button class="e-button e-primary" data-action="confirm-send" data-needs-draft>确认发送</button></div></section>` : ""}<section class="daily-contacts"><div class="e-sectionhead"><h2>今日来访 · ${esc(agent.overview?.day || "")}</h2><button class="text-button" data-action="daily-summary">核心总结 ${icon("arrow")}</button></div><small>另有 ${agent.overview?.groupCount || 0} 个群聊 · 仅统计实际识别的接待消息</small>${agent.overview?.items?.length ? agent.overview.items.map((c) => `<article class="daily-row"><div><strong>${esc(c.title)}</strong><span>${c.kind === "group" ? "群聊" : "私聊"} · 已回 ${c.replies} 条${c.finished ? " · 已收尾" : ""}</span></div><p>${esc(c.summary)}</p></article>`).join("") : '<div class="e-empty">新的联系和回复会自动记在这里。</div>'}</section><section class="assistant-tasks"><div class="e-sectionhead"><h2>需要你时，我会叫你</h2><span class="e-tag">${agent.tasks?.length || 0}</span></div>${agent.tasks?.length ? agent.tasks.map((t) => `<article class="task-card"><div class="e-sectionhead"><strong>${esc(t.title)}</strong><span class="e-tag">${t.kind === "group" ? "群聊" : "私聊"}</span></div><p>${esc(t.summary || t.reason || "需要人工处理")}</p>${t.reply ? `<div class="task-reply">${esc(t.reply)}</div>` : ""}<button class="e-button e-small" data-review-task="${t.id}">去微信接手 ${icon("arrow")}</button></article>`).join("") : `<div class="quiet-empty">${icon("shield")}<span>暂时没有待办<small>拿不准的问题会留在这里。</small></span></div>`}</section><div class="assistant-bottom"><button class="e-button" data-action="practice-open">${icon("sparkles")}先和 AI 试聊</button><button class="e-button" data-action="retry-current">处理当前消息</button><button class="e-button" data-page="knowledge">${icon("book")}添加业务资料</button></div></div>`;
+    return `<div class="assistant-home"><div class="assistant-heading"><span class="assistant-avatar ${agent.running ? "active" : ""}">${icon("wave")}</span><div><h1>${agent.running ? (agent.activityPaused ? "你先用微信，我等一会儿" : "我来照看消息") : "你的 AI 接待同事"}</h1><p>${ready ? "微信已自动连接" : "打开微信，开始接待"} · ${esc(s.identity.name)}</p></div><span class="e-tag ${workspace.hasApiKey ? "e-green" : ""}">${workspace.hasApiKey ? "Kimi 已接入" : "AI 待连接"}</span></div><section class="reception-card"><div class="reception-title"><span class="e-dot"></span>${agent.running ? "正在接待" : "准备接待"}<span>${s.mode === "auto" ? "自动发送" : "先准备草稿"}</span></div><h2>聊天还在微信里。<br>AI 在一旁帮你接待。</h2><p>${s.away?.enabled ? "结合聊天上下文自由接话、反问和记留言，闲聊不查业务资料。" : "自动发现新的私聊和群聊，结合上下文与业务资料回复。"}</p><button class="e-button e-primary start-reception" data-action="toggle-run" ${!agent.running && (pending || agent.busy) ? "disabled" : ""}>${icon(agent.running ? "pause" : "play")}${agent.running ? "暂停接待" : "开启微信接待"}</button><div class="reception-footnote">${esc(agent.status)}</div></section><section class="away-card"><div class="e-sectionhead"><div><h2>睡觉代班 · 闲聊</h2><small>${s.away?.enabled ? "老板休息中，AI 替你接话、记事" : "开启后，先说明 AI 身份，再接话和记留言"}</small></div><button class="e-button e-small ${s.away?.enabled ? "e-primary" : ""}" data-action="toggle-away">${s.away?.enabled ? "已开启 · 关闭" : "开启"}</button></div>${s.away?.enabled ? `<p>${esc(s.away.greeting)}</p>` : ""}</section><section class="scope-card"><div class="e-sectionhead"><h2>接待范围</h2><button class="text-button" data-page="rules">调整 ${icon("arrow")}</button></div><div class="scope-chips"><span class="scope-chip ${r.privateChats ? "enabled" : ""}">${icon("chat")}私聊 ${r.privateChats ? "已开启" : "已关闭"}</span><span class="scope-chip ${r.groupChats ? "enabled" : ""}">${icon("windows")}群聊 ${r.groupChats ? { mentions: "@我时", questions: "提问时", all: "全部新消息" }[r.groupPolicy] : "已关闭"}</span></div><div class="assistant-stats"><span><strong>${agent.overview?.privateCount || 0}</strong><small>今日联系人数</small></span><span><strong>${agent.overview?.repliesCount || 0}</strong><small>今日已回复</small></span><span><strong>${agent.tasks?.length || 0}</strong><small>需要你接手</small></span></div></section>${agent.draft ? `<section class="e-section review-card"><div class="e-sectionhead"><h2>${esc(agent.activeTitle || "待确认回复")}</h2><span class="e-tag">人工确认</span></div><textarea class="e-editor" id="reply-input">${esc(reply || agent.draft.text)}</textarea><p>${esc(agent.analysis?.reason || "确认后发送到原生微信")}</p><div class="control-row end"><button class="e-button e-primary" data-action="confirm-send" data-needs-draft>确认发送</button></div></section>` : ""}<section class="daily-contacts"><div class="e-sectionhead"><h2>今日来访 · ${esc(agent.overview?.day || "")}</h2><button class="text-button" data-action="daily-summary">核心总结 ${icon("arrow")}</button></div><small>另有 ${agent.overview?.groupCount || 0} 个群聊 · 仅统计实际识别的接待消息</small>${agent.overview?.items?.length ? agent.overview.items.map((c) => `<article class="daily-row"><div><strong>${esc(c.title)}</strong><span>${c.kind === "group" ? "群聊" : "私聊"} · 已回 ${c.replies} 条${c.finished ? " · 已收尾" : ""}</span></div><p>${esc(c.summary)}</p></article>`).join("") : '<div class="e-empty">新的联系和回复会自动记在这里。</div>'}</section><section class="assistant-tasks"><div class="e-sectionhead"><h2>需要你时，我会叫你</h2><span class="e-tag">${agent.tasks?.length || 0}</span></div>${agent.tasks?.length ? agent.tasks.map((t) => `<article class="task-card"><div class="e-sectionhead"><strong>${esc(t.title)}</strong><span class="e-tag">${t.kind === "group" ? "群聊" : "私聊"}</span></div><p>${esc(t.summary || t.reason || "需要人工处理")}</p>${t.reply ? `<div class="task-reply">${esc(t.reply)}</div>` : ""}<button class="e-button e-small" data-review-task="${t.id}">去微信接手 ${icon("arrow")}</button></article>`).join("") : `<div class="quiet-empty">${icon("shield")}<span>暂时没有待办<small>拿不准的问题会留在这里。</small></span></div>`}</section><div class="assistant-bottom"><button class="e-button" data-action="practice-open">${icon("sparkles")}先和 AI 试聊</button><button class="e-button" data-action="retry-current">处理当前消息</button><button class="e-button" data-page="knowledge">${icon("book")}添加业务资料</button></div></div>`;
   }
   function knowledge() {
     return (
@@ -189,7 +193,7 @@
         "先了解你的生意，再替你开口。",
         "添加自己的业务资料，让每一段接待都有依据。",
       ) +
-      `<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>招聘职位数据</h2><span class="e-tag ${workspace.settings.jobSource?.enabled ? "e-green" : ""}">${workspace.settings.jobSource?.enabled ? "已开启实时检索" : "未开启"}</span></div><p>ThaiChineseJobs · thaichinesejobs.com</p><div class="help-inline">从网站公开职位查询薪资、地点、岗位要求和应聘链接。近期未确认仍在招的岗位会明确提示。</div><div class="control-row" style="margin-top:14px"><button class="e-button" data-action="test-jobs">检验职位查询</button><button class="e-button" data-action="toggle-jobs">${workspace.settings.jobSource?.enabled ? "关闭检索" : "开启检索"}</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>招聘业务介绍</h2><small>AI 回复的事实依据</small></div><label class="e-field">告诉回响你提供什么服务<textarea id="business" rows="4" placeholder="例如：我们的服务范围、营业时间、预约方式，以及需要人工确认的事项。">${esc(workspace.settings.business)}</textarea></label><div class="control-row end"><button class="e-button e-primary" data-action="save-business">保存介绍</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>业务资料 <span class="muted">${(workspace.documents || []).length}</span></h2><button class="e-button e-primary" data-action="import-document">${icon("plus")}导入资料</button></div><p>导入 TXT、Markdown、PDF 或 Word 文档，AI 会检索相关段落来回答客户。</p>${(workspace.documents || []).map((d) => `<article class="faq-row"><div class="e-sectionhead"><strong>${esc(d.name)}</strong><button class="e-iconbutton" data-remove-document="${d.id}" aria-label="移除资料">${icon("trash")}</button></div><p>${esc(d.text.slice(0, 160))}…</p><small>${d.text.length.toLocaleString()} 字 · 已加入知识库</small></article>`).join("") || '<div class="e-empty">把招聘服务说明、应聘流程或岗位补充说明放到这里。</div>'}</section><section class="e-section"><div class="e-sectionhead"><h2>常见问答 <span class="muted">${workspace.faqs.length}</span></h2><button class="e-button e-primary" data-action="add-faq">${icon("plus")}添加问答</button></div>${workspace.faqs.length ? workspace.faqs.map((f) => `<article class="faq-row"><div class="e-sectionhead"><strong>${esc(f.question)}</strong><span class="e-tag ${f.enabled ? "e-green" : ""}">${f.enabled ? "已启用" : "已停用"}</span></div><p>${esc(f.answer)}</p><div class="faq-meta"><span>${f.autoSend ? "已授权自动发送" : "仅生成草稿"}</span><span>${esc(f.keywords.join(" · "))}</span><div class="control-row"><button class="e-iconbutton" data-edit-faq="${f.id}" aria-label="编辑问答">${icon("edit")}</button><button class="e-iconbutton" data-remove-faq="${f.id}" aria-label="移除问答">${icon("trash")}</button></div></div></article>`).join("") : '<div class="e-empty">还没有业务问答。先添加客户经常问的一个问题。</div>'}</section></div>`
+      `<div class="e-pagebody">${workspace.settings.jobSource?.enabled || /招聘|人力|猎头|recruit/i.test(workspace.settings.identity.industry) ? `<section class="e-section"><div class="e-sectionhead"><h2>职位数据连接</h2><span class="e-tag ${workspace.settings.jobSource?.enabled ? "e-green" : ""}">${workspace.settings.jobSource?.enabled ? "已开启实时检索" : "未开启"}</span></div><p>ThaiChineseJobs · thaichinesejobs.com</p><div class="help-inline">从网站公开职位查询薪资、地点、岗位要求和应聘链接。近期未确认仍在招的岗位会明确提示。</div><div class="control-row" style="margin-top:14px"><button class="e-button" data-action="test-jobs">检验职位查询</button><button class="e-button" data-action="toggle-jobs">${workspace.settings.jobSource?.enabled ? "关闭检索" : "开启检索"}</button></div></section>` : ""}<section class="e-section"><div class="e-sectionhead"><h2>业务介绍</h2><small>AI 回复的事实依据</small></div><label class="e-field">告诉回响你提供什么服务<textarea id="business" rows="4" placeholder="例如：我们的服务范围、营业时间、预约方式，以及需要人工确认的事项。">${esc(workspace.settings.business)}</textarea></label><div class="control-row end"><button class="e-button e-primary" data-action="save-business">保存介绍</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>业务资料 <span class="muted">${(workspace.documents || []).length}</span></h2><button class="e-button e-primary" data-action="import-document">${icon("plus")}导入资料</button></div><p>导入 TXT、Markdown、PDF 或 Word 文档，AI 会检索相关段落来回答客户。</p>${(workspace.documents || []).map((d) => `<article class="faq-row"><div class="e-sectionhead"><strong>${esc(d.name)}</strong><button class="e-iconbutton" data-remove-document="${d.id}" aria-label="移除资料">${icon("trash")}</button></div><p>${esc(d.text.slice(0, 160))}…</p><small>${d.text.length.toLocaleString()} 字 · 已加入知识库</small></article>`).join("") || '<div class="e-empty">上传服务说明、产品手册、政策或接待流程。</div>'}</section><section class="e-section"><div class="e-sectionhead"><h2>常见问答 <span class="muted">${workspace.faqs.length}</span></h2><button class="e-button e-primary" data-action="add-faq">${icon("plus")}添加问答</button></div>${workspace.faqs.length ? workspace.faqs.map((f) => `<article class="faq-row"><div class="e-sectionhead"><strong>${esc(f.question)}</strong><span class="e-tag ${f.enabled ? "e-green" : ""}">${f.enabled ? "已启用" : "已停用"}</span></div><p>${esc(f.answer)}</p><div class="faq-meta"><span>${f.autoSend ? "已授权自动发送" : "仅生成草稿"}</span><span>${esc(f.keywords.join(" · "))}</span><div class="control-row"><button class="e-iconbutton" data-edit-faq="${f.id}" aria-label="编辑问答">${icon("edit")}</button><button class="e-iconbutton" data-remove-faq="${f.id}" aria-label="移除问答">${icon("trash")}</button></div></div></article>`).join("") : '<div class="e-empty">还没有业务问答。先添加客户经常问的一个问题。</div>'}</section></div>`
     );
   }
   function rules() {
@@ -200,7 +204,7 @@
         "设定角色和目标，结合业务资料与上下文作出回复判断。",
         `<button class="e-button e-primary" data-action="practice-open">${icon("sparkles")}和 AI 试聊</button>`,
       ) +
-      `<div class="e-pagebody"><section class="e-section"><h2>AI 性格</h2><label class="e-field">说话风格<select id="personality-preset">${[
+      `<div class="e-pagebody"><section class="e-section"><h2>助手名片</h2><label class="e-field">AI 对外名称<input id="assistant-name" maxlength="40" value="${esc(s.identity.name)}" placeholder="例如：小林助手"></label><label class="e-field">你的行业<input id="business-industry" maxlength="100" value="${esc(s.identity.industry)}" placeholder="例如：零售、培训、餐饮、招聘"></label><div class="control-row"><button class="e-button e-primary" data-action="save-identity">保存名片</button><button class="e-button" data-page="knowledge">添加业务资料</button></div></section><section class="e-section"><h2>AI 性格</h2><label class="e-field">说话风格<select id="personality-preset">${[
         ["warm", "温和自然"],
         ["witty", "轻松幽默"],
         ["direct", "简洁直接"],
@@ -262,14 +266,63 @@
         "每次对话，留下核心。",
         "按联系人列出诉求、下一步和需要你处理的事。明确告别后标记结束，10 分钟无新对话则保留本轮小结。",
       ) +
-      `<div class="e-pagebody"><section class="e-section conversation-reports"><div class="e-sectionhead"><h2>对话核心 · 最近14天</h2><button class="e-button e-small" data-action="refresh-logs">${icon("refresh")}刷新</button></div><button class="e-button e-small" data-action="summarize-current">提取当前微信聊天核心</button><p class="help-inline">仅总结当前可见聊天，不向对方发送消息。</p>${reports.length ? reports.map((r) => `<article class="conversation-report"><div class="e-sectionhead"><strong>${esc(r.title)}</strong><span class="e-tag ${r.ownerTodo.length ? "e-warm" : ""}">${r.finished ? "已结束" : r.idle ? "本轮小结" : "进行中"}</span></div><time>${new Date(r.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><p class="report-core">${esc(r.core)}</p><dl>${details("对方想要", r.intent)}${details("下一步", r.nextSteps.join("；") || "暂无明确下一步")}${details("需要你处理", r.ownerTodo.join("；") || "暂无待办")}</dl></article>`).join("") : '<div class="e-empty">AI 接待后，会在这里逐人提取对话核心。纯闲聊也会注明主题，不凭空生成待办。</div>'}</section><details class="e-section"><summary>运行记录</summary>${workspace.events.length ? workspace.events.map((e) => `<div class="log-row"><time datetime="${esc(e.time)}">${new Date(e.time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><span class="e-tag ${e.type === "warning" ? "e-warm" : ""}">${{ start: "开始", sent: "已发送", warning: "需检查", handoff: "待处理", draft: "草稿" }[e.type] || "记录"}</span><span>${esc(e.message)}</span></div>`).join("") : '<div class="e-empty">暂无运行记录。</div>'}</details></div>`
+      `<div class="e-pagebody"><section class="e-section conversation-reports"><div class="e-sectionhead"><h2>对话核心 · 最近14天</h2><button class="e-button e-small" data-action="refresh-logs">${icon("refresh")}刷新</button></div><button class="e-button e-small" data-action="summarize-current">选择聊天并总结</button><p class="help-inline">在回响选联系人，自动切到微信读取本轮对话。</p>${reports.length ? reports.map((r) => `<article class="conversation-report"><div class="e-sectionhead"><strong>${esc(r.title)}</strong><span class="e-tag ${r.ownerTodo.length ? "e-warm" : ""}">${r.finished ? "已结束" : r.idle ? "本轮小结" : "进行中"}</span></div><time>${new Date(r.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><p class="report-core">${esc(r.core)}</p><dl>${details("对方想要", r.intent)}${details("下一步", r.nextSteps.join("；") || "暂无明确下一步")}${details("需要你处理", r.ownerTodo.join("；") || "暂无待办")}</dl></article>`).join("") : '<div class="e-empty">AI 接待后，会在这里逐人提取对话核心。纯闲聊也会注明主题，不凭空生成待办。</div>'}</section><details class="e-section"><summary>运行记录</summary>${workspace.events.length ? workspace.events.map((e) => `<div class="log-row"><time datetime="${esc(e.time)}">${new Date(e.time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><span class="e-tag ${e.type === "warning" ? "e-warm" : ""}">${{ start: "开始", sent: "已发送", warning: "需检查", handoff: "待处理", draft: "草稿" }[e.type] || "记录"}</span><span>${esc(e.message)}</span></div>`).join("") : '<div class="e-empty">暂无运行记录。</div>'}</details></div>`
     );
+  }
+  function wechatTools() {
+    const settings = workspace.settings.wechatTools;
+    const profiles = socialRecords.profiles;
+    const categories = [
+      "全部",
+      ...new Set(profiles.flatMap((p) => p.categories)),
+    ];
+    const visibleProfiles =
+      profileCategory === "全部"
+        ? profiles
+        : profiles.filter((p) => p.categories.includes(profileCategory));
+    return `<div class="e-pagebody wechat-tools">
+      <div class="e-sectionhead"><h1>微信工具</h1><button class="e-button e-small" data-action="wechat-chats" data-needs-idle>返回微信聊天</button></div>
+      <section class="e-section"><div class="e-sectionhead"><h2>发朋友圈</h2><button class="e-button e-small" data-action="wechat-feed" data-needs-idle>查看朋友圈</button></div>
+      <label class="e-field">正文<textarea id="moment-text" class="e-editor" rows="3" maxlength="1500" placeholder="写下想分享的内容">${esc(momentText)}</textarea></label>
+      <div class="control-row"><button class="e-button e-primary e-small" data-action="wechat-moment-text" data-needs-idle>去微信检查并发表</button><button class="e-button e-small" data-action="wechat-moment-media" data-needs-idle>选图片或视频</button><button class="e-button e-small" data-action="wechat-moment-copy">复制正文</button></div>
+      ${
+        socialRecords.drafts.length
+          ? `<details class="social-history"><summary>本机草稿 · ${socialRecords.drafts.length}</summary>${socialRecords.drafts
+              .slice(0, 20)
+              .map(
+                (draft) =>
+                  `<article class="social-row"><span>${esc(draft.body || "图片或视频草稿")}</span><button class="text-button" data-moment-draft="${esc(draft.id)}">使用</button></article>`,
+              )
+              .join("")}</details>`
+          : ""
+      }</section>
+      <section class="e-section"><h2>指定好友动态</h2><label class="social-toggle"><input type="checkbox" id="wechat-watch-enabled" ${settings.watchEnabled ? "checked" : ""}> 追踪指定好友</label>
+      <label class="e-field">微信显示名称，每行一位<textarea id="wechat-watch-names" rows="2">${esc(settings.watchNames.join("\n"))}</textarea></label>
+      <div class="control-row"><button class="e-button e-small" data-action="wechat-tools-save">保存设置</button><button class="e-button e-small" data-action="wechat-scan" data-needs-idle>查看指定好友动态</button></div>
+      <p class="help-inline">独立朋友圈窗口打开时，空闲会检查可见动态。点赞在微信中点选。</p>
+      ${(socialRecords.moments || [])
+        .slice(0, 12)
+        .map(
+          (item) =>
+            `<article class="social-row"><strong>${esc(item.author)}</strong><p>${esc(item.excerpt)}</p></article>`,
+        )
+        .join("")}</section>
+      <section class="e-section"><h2>联系人画像</h2><label class="social-toggle"><input type="checkbox" id="wechat-profile-enabled" ${settings.profileEnabled ? "checked" : ""}> 启用联系人画像</label><label class="social-toggle"><input type="checkbox" id="wechat-profile-history" ${settings.profileHistoryEnabled ? "checked" : ""}> 从私聊记录学习</label><p class="help-inline">开启后从已保存和当前可见的私聊找对方的明确自述，在本机保留分类及依据。</p>
+      <p class="help-inline">在微信通讯录选中联系人后，读取可见昵称、头像和个性签名。类别由昵称和签名中的业务线索得出。</p>
+      <div class="control-row"><button class="e-button e-small" data-action="wechat-contacts" data-needs-idle>打开通讯录</button><button class="e-button e-primary e-small" data-action="wechat-read-profile" data-needs-idle>读取当前联系人</button><button class="e-button e-small" data-action="wechat-learn-profile" data-needs-idle>学习当前私聊</button></div>
+      <label class="e-field">分类<select id="profile-category">${categories.map((category) => `<option ${category === profileCategory ? "selected" : ""}>${esc(category)}</option>`).join("")}</select></label>
+      ${visibleProfiles.length ? visibleProfiles.map((profile) => `<article class="social-profile">${/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(profile.avatar) ? `<img src="${esc(profile.avatar)}" alt="头像">` : ""}<div><strong>${esc(profile.name)}</strong><div class="social-tags">${profile.categories.map((category) => `<span class="e-tag">${esc(category)}</span>`).join("")}</div><p>${esc(profile.signature || (profile.source ? "来源：私聊自述" : "微信资料未显示个性签名"))}</p>${profile.history?.length ? `<ul class="profile-evidence">${profile.history.map((entry) => `<li>${esc(entry.text)}</li>`).join("")}</ul>` : ""}</div></article>`).join("") : '<div class="e-empty">这里会保存已读取的联系人及其分类。</div>'}</section></div>`;
   }
   function render() {
     if (!workspace) return;
-    $("#content").innerHTML = { inbox, knowledge, rules, channels, logs }[
-      page
-    ]();
+    $("#content").innerHTML = {
+      inbox,
+      knowledge,
+      rules,
+      channels,
+      logs,
+      wechatTools,
+    }[page]();
     icons();
     updateChrome();
   }
@@ -442,6 +495,13 @@
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || b.disabled) return;
+    if (b.dataset.momentDraft) {
+      momentText =
+        socialRecords.drafts.find((draft) => draft.id === b.dataset.momentDraft)
+          ?.body || "";
+      $("#moment-text").value = momentText;
+      return;
+    }
     if (b.dataset.page) {
       page = b.dataset.page;
       if (page !== "inbox" && demo) {
@@ -450,6 +510,11 @@
       }
       render();
       if (page === "channels") action(permissionRefresh);
+      if (page === "wechatTools")
+        action(async () => {
+          socialRecords = await api.wechatToolsLoad();
+          render();
+        });
       if (page === "logs")
         action(async () => {
           await reload();
@@ -513,11 +578,73 @@
       return;
     }
     const type = b.dataset.action;
+    if (type === "wechat-tools-save")
+      action(async () => {
+        workspace = await api.wechatToolsSettings({
+          profileEnabled: $("#wechat-profile-enabled").checked,
+          profileHistoryEnabled: $("#wechat-profile-history").checked,
+          watchEnabled: $("#wechat-watch-enabled").checked,
+          watchNames: $("#wechat-watch-names").value.split(/\n+/),
+        });
+        render();
+        notify("微信工具设置已保存");
+      });
+    if (type === "wechat-feed") action(() => api.wechatMoments());
+    if (type === "wechat-contacts") action(() => api.wechatContacts());
+    if (type === "wechat-chats") action(() => api.wechatChats());
+    if (type === "wechat-moment-copy")
+      action(async () => {
+        if (!momentText.trim()) throw new Error("请先写朋友圈正文");
+        await api.copyMoment(momentText);
+        notify("已复制朋友圈正文");
+      });
+    if (type === "wechat-moment-text" || type === "wechat-moment-media")
+      action(async () => {
+        try {
+          const result = await api.wechatMomentEditor({
+            text: momentText,
+            kind: type.endsWith("media") ? "media" : "text",
+          });
+          notify(result.message);
+        } finally {
+          socialRecords = await api.wechatToolsLoad();
+          render();
+        }
+      });
+    if (type === "wechat-scan")
+      action(async () => {
+        const result = await api.wechatMomentsScan();
+        socialRecords = await api.wechatToolsLoad();
+        render();
+        notify(
+          `当前可见 ${result.found} 条指定好友动态，新记录 ${result.added} 条`,
+        );
+      });
+    if (type === "wechat-learn-profile")
+      action(async () => {
+        const profile = await api.wechatLearnProfile();
+        socialRecords = await api.wechatToolsLoad();
+        profileCategory = "全部";
+        render();
+        notify(
+          profile?.history?.length
+            ? "已保存私聊自述及分类"
+            : "暂无明确自述，已标为待确认",
+        );
+      });
+    if (type === "wechat-read-profile")
+      action(async () => {
+        await api.wechatProfile();
+        socialRecords = await api.wechatToolsLoad();
+        profileCategory = "全部";
+        render();
+        notify("联系人画像已分类保存");
+      });
     if (type === "practice-open") {
       practiceMessages = [];
       modal(
         "和你的 AI 接待同事试聊",
-        `<p>使用当前角色和业务资料进行真实 AI 试聊。消息不会发到微信。</p><div id="practice-history" class="practice-history"><div class="e-empty">像客户一样发一句话，看看它怎么接。</div></div><label class="e-field">客户消息<textarea id="practice-input" rows="2" placeholder="例如：我想找个两居室，下个月搬家，预算五千左右。"></textarea></label><div class="e-modal-actions"><button class="e-button e-primary" data-action="practice-send">发送试聊</button></div>`,
+        `<p>使用当前角色和业务资料进行真实 AI 试聊。消息不会发到微信。</p><div id="practice-history" class="practice-history"><div class="e-empty">像客户一样发一句话，看看它怎么接。</div></div><label class="e-field">客户消息<textarea id="practice-input" rows="2" placeholder="例如：你们提供什么服务，怎么预约？"></textarea></label><div class="e-modal-actions"><button class="e-button e-primary" data-action="practice-send">发送试聊</button></div>`,
         true,
       );
       return;
@@ -765,6 +892,20 @@
         notify(agent.status);
       });
     }
+    if (type === "save-identity")
+      action(async () => {
+        const wasRunning = agent.running;
+        workspace = await api.saveSettings({
+          ...workspace.settings,
+          identity: {
+            name: $("#assistant-name").value,
+            industry: $("#business-industry").value,
+          },
+        });
+        if (wasRunning) agent = await api.start();
+        render();
+        notify("助手名片已保存");
+      });
     if (type === "save-business") {
       action(async () => {
         workspace = await api.saveSettings({
@@ -890,7 +1031,18 @@
       });
     if (type === "summarize-current")
       action(async () => {
-        agent = await api.summarizeCurrent();
+        const { activeId, sessions } = await api.summarySessions();
+        if (!sessions.length) throw new Error("微信列表暂时没有可总结的会话");
+        modal(
+          "选择要总结的微信聊天",
+          `<label class="e-field">会话<select id="summary-session">${sessions.map((session) => `<option value="${esc(session.id)}" ${session.id === activeId ? "selected" : ""}>${esc(session.name)}</option>`).join("")}</select></label><p>回响会自动切换到该会话并读取可见内容。</p><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-action="summarize-selected">提取对话核心</button></div>`,
+        );
+      });
+    if (type === "summarize-selected")
+      action(async () => {
+        const id = $("#summary-session").value;
+        closeModal();
+        agent = await api.summarizeCurrent(id);
         render();
         notify("对话核心已保存");
       });
@@ -903,8 +1055,14 @@
   });
   root.addEventListener("input", (e) => {
     if (e.target.id === "reply-input") reply = e.target.value;
+    if (e.target.id === "moment-text") momentText = e.target.value;
   });
   root.addEventListener("change", (e) => {
+    if (e.target.id === "profile-category") {
+      profileCategory = e.target.value;
+      render();
+      return;
+    }
     if (e.target.id === "wechat-window") {
       selectedWindow = Number(e.target.value);
       capture = null;

@@ -20,6 +20,7 @@ class Store {
       dailyInsights: {},
       conversationReports: [],
       modelRetries: {},
+      wechatRecords: { profiles: [], drafts: [], moments: [] },
       events: [],
       ledger: [],
       encryptedKey: "",
@@ -54,6 +55,7 @@ class Store {
       dailyInsights,
       conversationReports,
       modelRetries,
+      wechatRecords,
       ...data
     } = this.data;
     return structuredClone({ ...data, hasApiKey: !!encryptedKey });
@@ -277,6 +279,47 @@ class Store {
     if (entry) entries.unshift([sessionId, entry]);
     this.data.modelRetries = Object.fromEntries(entries.slice(0, 100));
     this.flush();
+  }
+  recordProfile(profile) {
+    const record = { ...profile, updatedAt: new Date().toISOString() };
+    this.data.wechatRecords.profiles = [
+      record,
+      ...this.data.wechatRecords.profiles.filter((p) => p.id !== record.id),
+    ].slice(0, 200);
+    this.flush();
+    return record;
+  }
+  recordMomentDraft(body, kind) {
+    const previous = this.data.wechatRecords.drafts.find(
+      (draft) => draft.body === body && draft.kind === kind,
+    );
+    const record = {
+      id: previous?.id || require("node:crypto").randomUUID(),
+      body,
+      kind,
+      updatedAt: new Date().toISOString(),
+    };
+    this.data.wechatRecords.drafts = [
+      record,
+      ...this.data.wechatRecords.drafts.filter(
+        (draft) => draft.id !== record.id,
+      ),
+    ].slice(0, 100);
+    this.flush();
+    return record;
+  }
+  recordWatchedMoments(candidates) {
+    const previous = this.data.wechatRecords.moments || [];
+    const seen = new Set(previous.map((record) => record.id));
+    const additions = candidates.filter((record) => !seen.has(record.id));
+    if (additions.length) {
+      this.data.wechatRecords.moments = [...additions, ...previous].slice(
+        0,
+        100,
+      );
+      this.flush();
+    }
+    return additions.length;
   }
   attempted(key) {
     return this.data.ledger.some(

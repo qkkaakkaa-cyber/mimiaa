@@ -11,6 +11,8 @@ const {
   powerMonitor,
   systemPreferences,
   dialog,
+  nativeImage,
+  clipboard,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -25,6 +27,7 @@ const {
 } = require("./lib/provider-import.cjs");
 const { validateEndpoint } = require("./lib/domain.cjs");
 const { readBusinessDocument } = require("./lib/documents.cjs");
+const { WeChatTools } = require("./lib/wechat-tools.cjs");
 app.setName("回响");
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
@@ -32,6 +35,7 @@ let window,
   store,
   agent,
   native,
+  wechatTools,
   sessionKey = "",
   sessionKeyBase = "";
 const uiFile = path.join(__dirname, "renderer/index.html");
@@ -129,6 +133,27 @@ function createWindow() {
   window.on("close", () => agent?.stop("窗口关闭，接待已暂停"));
 }
 function register() {
+  safeIPC("wechat-tools:load", () => store.data.wechatRecords);
+  safeIPC("wechat-tools:settings", (value) =>
+    store.settings({ ...store.data.settings, wechatTools: value }),
+  );
+  safeIPC("wechat-tools:profile", () => wechatTools.readProfile());
+  safeIPC("wechat-tools:learn-profile", () => wechatTools.learnProfile());
+  safeIPC("wechat-tools:contacts", () => wechatTools.openContacts());
+  safeIPC("wechat-tools:chats", () => wechatTools.openChats());
+  safeIPC("wechat-tools:feed", async () => {
+    await wechatTools.openMoments();
+  });
+  safeIPC("wechat-tools:scan", () => wechatTools.scanMoments());
+  safeIPC("wechat-tools:editor", (value) =>
+    wechatTools.openEditor({
+      text: value?.text,
+      kind: value?.kind === "media" ? "media" : "text",
+    }),
+  );
+  safeIPC("wechat-tools:copy", (text) =>
+    clipboard.writeText(String(text || "").slice(0, 1500)),
+  );
   safeIPC("workspace:load", () => ({
     workspace: store.public(),
     agent: agent.state(),
@@ -199,7 +224,10 @@ function register() {
     return { capture, ...(await agent.intelligence().layout(capture)) };
   });
   safeIPC("agent:discover", () => agent.discover());
-  safeIPC("agent:summarize-current", () => agent.summarizeCurrent());
+  safeIPC("agent:summary-sessions", () => agent.summarySessions());
+  safeIPC("agent:summarize-current", (id) =>
+    agent.summarizeCurrent(typeof id === "string" ? id.slice(0, 500) : ""),
+  );
   safeIPC("agent:review-task", (id) => agent.reviewTask(String(id)));
   safeIPC("jobs:test", () =>
     new (require("./lib/jobs.cjs").JobCatalog)().search({
@@ -319,6 +347,34 @@ app
       preferences: systemPreferences,
       idleTime: () => powerMonitor.getSystemIdleTime(),
     });
+    wechatTools = new WeChatTools({
+      native,
+      store,
+      cropAvatar: (shot, window, avatar) => {
+        const scaleX = shot.width / window.w,
+          scaleY = shot.height / window.h;
+        const rect = {
+          x: Math.round((avatar.x - window.x) * scaleX),
+          y: Math.round((avatar.y - window.y) * scaleY),
+          width: Math.round(avatar.w * scaleX),
+          height: Math.round(avatar.h * scaleY),
+        };
+        if (
+          rect.x < 0 ||
+          rect.y < 0 ||
+          rect.width < 4 ||
+          rect.height < 4 ||
+          rect.x + rect.width > shot.width ||
+          rect.y + rect.height > shot.height
+        )
+          return "";
+        return nativeImage
+          .createFromBuffer(Buffer.from(shot.image, "base64"))
+          .crop(rect)
+          .resize({ width: 100 })
+          .toDataURL();
+      },
+    });
     agent = new Agent({
       store,
       native,
@@ -338,6 +394,16 @@ app
         }
       },
     });
+    agent.scanIdleMoments = () => {
+      try {
+        wechatTools.scanIdle();
+      } catch {
+        /* Chat reception continues if the feed is unavailable. */
+      }
+    };
+    agent.learnContact = (contact, messages) =>
+      wechatTools.learnFromSnapshot(contact, messages);
+    agent.openChatsForSummary = () => wechatTools.openChatsForSummary();
     const activityPoll = setInterval(() => {
       try {
         if (!native.navigating)

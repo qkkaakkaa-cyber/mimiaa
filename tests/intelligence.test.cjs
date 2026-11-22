@@ -110,3 +110,38 @@ test("已有配置解析只接受官方服务且排除其他分节", () => {
     ),
   );
 });
+
+test("通用助手的模型请求使用客户设置的名称与行业，不附带招聘规则", async () => {
+  let systemPrompt;
+  const ai = new Intelligence({
+    data: {
+      settings: {
+        ...settings,
+        identity: { name: "小林助手", industry: "摄影工作室" },
+        model: { baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6" },
+      },
+      faqs: [],
+    },
+    getKey: async () => "test-key",
+    fetchImpl: async (_url, options) => {
+      systemPrompt = JSON.parse(options.body).messages[0].content;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content:
+                  '{"action":"ask","reply":"你好，我是小林助手。你想了解哪类拍摄？"}',
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+  await ai.decide([{ role: "in", text: "你好，你是谁" }]);
+  assert.match(systemPrompt, /小林助手/);
+  assert.match(systemPrompt, /摄影工作室/);
+  assert.doesNotMatch(systemPrompt, /招聘咨询时|公开岗位/);
+});

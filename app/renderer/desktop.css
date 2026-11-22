@@ -1123,3 +1123,59 @@ body {
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
+.wechat-tools h1 {
+  font-size: 22px;
+  margin: 0;
+}
+.wechat-tools .control-row {
+  flex-wrap: wrap;
+}
+.social-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+}
+.social-row,
+.social-profile {
+  padding: 12px 0;
+  border-top: 1px solid #e9eef6;
+  overflow-wrap: anywhere;
+}
+.social-row:has(button) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.social-history {
+  margin-top: 16px;
+}
+.social-history summary {
+  cursor: pointer;
+  color: #42597a;
+  padding-bottom: 8px;
+}
+.social-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.social-profile img {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 10px;
+  flex: none;
+}
+.social-profile p,
+.social-row p {
+  margin: 6px 0 0;
+  white-space: pre-line;
+}
+.social-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}

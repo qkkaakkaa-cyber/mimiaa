@@ -5,6 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 // This module is loaded into Electron's main process. macOS therefore checks
@@ -100,10 +101,15 @@ void clickInput(napi_env env,napi_value params) {
   napi_value input=field(env,params,"input");double x=number(env,input,"x"),y=number(env,input,"y");
   if(x<0||x>1||y<0||y>1)throw std::runtime_error("输入位置超出窗口范围");
   CGPoint point=CGPointMake(target.frame.origin.x+x*target.frame.size.width,target.frame.origin.y+y*target.frame.size.height);
+  bool hasHold=false;napi_has_named_property(env,params,"hold",&hasHold);
+  double hold=hasHold?number(env,params,"hold"):0;
+  if(hold<0||hold>1500)throw std::runtime_error("按键时长无效");
   CGEventRef down=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
   CGEventRef up=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);
   if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建输入事件");}
-  CGEventPost(kCGHIDEventTap,down);CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
+  CGEventPost(kCGHIDEventTap,down);
+  if(hold)std::this_thread::sleep_for(std::chrono::milliseconds((int)hold));
+  CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
 }
 void type(napi_env env,napi_value params) {
   Target target(env,params);target.assertFocused();std::u16string chars=text(env,params,"text");
@@ -137,7 +143,7 @@ void walk(AXUIElementRef node,NSMutableArray *items,int depth,int &count) {
   NSString *identifier=stringAttr(node,kAXIdentifierAttribute);
   NSString *value=stringAttr(node,kAXValueAttribute),*label=stringAttr(node,kAXDescriptionAttribute),*title=stringAttr(node,kAXTitleAttribute);
   if(identifier.length || label.length || title.length || value.length){
-    [items addObject:@{@"id":identifier,@"value":value,@"label":label,@"title":title,@"frame":rectJSON(bounds(node)),@"role":stringAttr(node,kAXRoleAttribute)}];
+    [items addObject:@{@"id":identifier,@"value":value,@"label":label,@"title":title,@"frame":rectJSON(bounds(node)),@"role":stringAttr(node,kAXRoleAttribute),@"depth":@(depth)}];
   }
   CFTypeRef children=nullptr;
   if(AXUIElementCopyAttributeValue(node,kAXChildrenAttribute,&children)==kAXErrorSuccess && children && CFGetTypeID(children)==CFArrayGetTypeID()){
@@ -145,7 +151,7 @@ void walk(AXUIElementRef node,NSMutableArray *items,int depth,int &count) {
   }
   if(children)CFRelease(children);
 }
-napi_value Inspect(napi_env env,napi_callback_info info){
+napi_value inspectWindow(napi_env env,bool social){
  @autoreleasepool {try{
   if(!AXIsProcessTrusted())throw std::runtime_error("请先为回响开启辅助功能权限");
   NSRunningApplication *running=nil;
@@ -153,22 +159,24 @@ napi_value Inspect(napi_env env,napi_callback_info info){
   if(!running)throw std::runtime_error("请先登录电脑微信");
   AXUIElementRef app=AXUIElementCreateApplication(running.processIdentifier);CFTypeRef windows=nullptr;
   AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&windows);CFRelease(app);
-  NSMutableDictionary *result=nil;
+  NSMutableArray *results=[NSMutableArray array];
   if(windows && CFGetTypeID(windows)==CFArrayGetTypeID())for(CFIndex i=0;i<CFArrayGetCount((CFArrayRef)windows);i++){
     AXUIElementRef win=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)windows,i);NSMutableArray *items=[NSMutableArray array];int count=0;walk(win,items,0,count);
     BOOL hasSessions=NO;for(NSDictionary *item in items)if([item[@"id"] isEqual:@"session_list"])hasSessions=YES;
-    if(!hasSessions)continue;
+    if(!social&&!hasSessions)continue;
     CGRect frame=bounds(win);NSNumber *windowID=nil;
     NSArray *infos=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
     for(NSDictionary *entry in infos){CGRect candidate;NSDictionary *box=entry[(id)kCGWindowBounds];if([entry[(id)kCGWindowOwnerPID] intValue]==running.processIdentifier && CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)box,&candidate) && close(candidate,frame)){windowID=entry[(id)kCGWindowNumber];break;}}
     if(!windowID)continue;
-    result=[@{@"pid":@(running.processIdentifier),@"frame":rectJSON(frame),@"windowId":windowID,@"items":items} mutableCopy];break;
+    [results addObject:@{@"pid":@(running.processIdentifier),@"frame":rectJSON(frame),@"windowId":windowID,@"items":items,@"title":stringAttr(win,kAXTitleAttribute)}];if(!social)break;
   }
   if(windows)CFRelease(windows);
-  if(!result)throw std::runtime_error("请展开微信的聊天列表，回响会自动识别");
-  NSData *json=[NSJSONSerialization dataWithJSONObject:result options:0 error:nil];napi_value out;napi_create_string_utf8(env,(const char*)json.bytes,json.length,&out);return out;
+  if(!results.count)throw std::runtime_error(social?"请打开电脑微信":"请展开微信的聊天列表，回响会自动识别");
+  NSData *json=[NSJSONSerialization dataWithJSONObject:social?(id)results:results.firstObject options:0 error:nil];napi_value out;napi_create_string_utf8(env,(const char*)json.bytes,json.length,&out);return out;
  }catch(const std::exception &error){napi_throw_error(env,nullptr,error.what());return nullptr;}}
 }
+napi_value Inspect(napi_env env,napi_callback_info info){return inspectWindow(env,false);}
+napi_value InspectSocial(napi_env env,napi_callback_info info){return inspectWindow(env,true);}
 
 struct CaptureContext {napi_deferred deferred;};
 struct CaptureOutcome {std::string json;std::string error;};
@@ -235,6 +243,31 @@ AXUIElementRef verifiedChat(Target &target,NSString *expected){
  NSRegularExpression *count=[NSRegularExpression regularExpressionWithPattern:@"\\s*[（(][0-9]+[)）]\\s*$" options:0 error:nil];name=[count stringByReplacingMatchesInString:name options:0 range:NSMakeRange(0,name.length) withTemplate:@""];
  if(![name isEqual:expected]){CFRelease(chosen);throw std::runtime_error("聊天对象已变化，停止后台输入");}return chosen;
 }
+void writeMoment(napi_env env,napi_value params){
+ Target target(env,params);target.assertFocused();NSString *draft=longString(env,params,"text");
+ CFTypeRef raw=nullptr;AXUIElementCopyAttributeValue(target.app,kAXFocusedWindowAttribute,&raw);
+ if(!raw||CFGetTypeID(raw)!=AXUIElementGetTypeID()){if(raw)CFRelease(raw);throw std::runtime_error("未找到朋友圈编辑器");}
+ auto win=(AXUIElementRef)raw;
+ if(![stringAttr(win,kAXTitleAttribute) isEqual:@"朋友圈"]){
+   CFRelease(raw);throw std::runtime_error("当前窗口不是朋友圈编辑器");
+ }
+ AXUIElementRef publish=findElement(win,nil,@"发表"),cancel=findElement(win,nil,@"取消");
+ bool editor=publish&&cancel;
+ if(publish)CFRelease(publish);if(cancel)CFRelease(cancel);
+ if(!editor){CFRelease(raw);throw std::runtime_error("无法确认朋友圈编辑器");}
+ CFTypeRef children=nullptr;AXUIElementCopyAttributeValue(win,kAXChildrenAttribute,&children);CFRelease(raw);
+ AXUIElementRef input=nullptr;
+ if(children&&CFGetTypeID(children)==CFArrayGetTypeID())for(CFIndex i=0;i<CFArrayGetCount((CFArrayRef)children);i++){
+   auto node=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)children,i);
+   if([stringAttr(node,kAXRoleAttribute) isEqual:@"AXTextArea"]){input=(AXUIElementRef)CFRetain(node);break;}
+ }
+ if(children)CFRelease(children);
+ if(!input)throw std::runtime_error("未找到朋友圈正文输入框");
+ if(stringAttr(input,kAXValueAttribute).length){CFRelease(input);throw std::runtime_error("朋友圈已留有草稿，请先处理");}
+ AXError result=AXUIElementSetAttributeValue(input,kAXValueAttribute,(__bridge CFStringRef)draft);
+ CFRelease(input);if(result!=kAXErrorSuccess)throw std::runtime_error("微信未接受正文，请复制草稿后粘贴");
+}
+napi_value WriteMoment(napi_env e,napi_callback_info i){return run(e,i,writeMoment);}
 void setComposer(napi_env env,napi_value params){
  Target target(env,params);NSString *reply=longString(env,params,"text"),*expected=longString(env,params,"expectedTitle");
  AXUIElementRef win=verifiedChat(target,expected),input=findElement(win,@"chat_input_field",nil);CFRelease(win);
@@ -299,6 +332,8 @@ napi_value Init(napi_env env,napi_value exports){
     {"screenTrusted",nullptr,ScreenTrusted,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"requestScreen",nullptr,RequestScreen,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"inspect",nullptr,Inspect,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"inspectSocial",nullptr,InspectSocial,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"writeMoment",nullptr,WriteMoment,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"isTrusted",nullptr,Trusted,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"focus",nullptr,Focus,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"clickInput",nullptr,Click,nullptr,nullptr,nullptr,napi_default,nullptr},

@@ -239,7 +239,14 @@ class FleetAgent extends Agent {
         this.status = "你正在使用微信，AI 已自动暂停";
         return;
       }
-      const d = await this.discover();
+      let d;
+      try {
+        d = await this.discover();
+      } catch (error) {
+        if (!/请展开微信的聊天列表/.test(error.message)) throw error;
+        this.status = "微信当前在其他页面，返回聊天列表后继续接待";
+        return;
+      }
       if (ticket !== this.epoch) return;
       for (const row of d.sessions) {
         const previous = this.seen.get(row.id);
@@ -260,6 +267,7 @@ class FleetAgent extends Agent {
       const row = this.queue.values().next().value;
       if (!row) {
         this.status = "接待中 · 等待新的私聊和群聊消息";
+        if (this.idleTime() >= 15) this.scanIdleMoments?.();
         return;
       }
       if (
@@ -333,6 +341,8 @@ class FleetAgent extends Agent {
       }
       if (snapshot.last?.role === "in")
         this.store.insight("in", context, snapshot);
+      if (snapshot.last?.role === "in")
+        this.learnContact?.(context, snapshot.messages);
       const previousTask = this.tasks.find(
         (t) =>
           t.context.sessionId === context.sessionId &&
@@ -435,13 +445,51 @@ class FleetAgent extends Agent {
       this.schedule();
     }
   }
-  async summarizeCurrent() {
+  async summarySessions() {
+    if (this.busy) throw new Error("正在处理消息，请稍后再总结");
+    this.busy = true;
+    try {
+      const d = await this.discoverForSummary();
+      return {
+        activeId: d.active?.sessionId || "",
+        sessions: d.sessions.map(({ id, name }) => ({ id, name })),
+      };
+    } finally {
+      this.busy = false;
+      this.emit();
+      this.schedule();
+    }
+  }
+  async discoverForSummary() {
+    try {
+      return await this.discover();
+    } catch (error) {
+      if (
+        !this.openChatsForSummary ||
+        !/请展开微信的聊天列表/.test(error.message)
+      )
+        throw error;
+      await this.openChatsForSummary();
+      return this.discover();
+    }
+  }
+  async summarizeCurrent(sessionId) {
     if (this.busy) throw new Error("正在处理消息，请稍后再总结");
     this.busy = true;
     const ticket = this.epoch;
     try {
-      const d = await this.discover();
-      if (!d.active?.sessionId) throw new Error("请在微信打开需要总结的聊天");
+      let d = await this.discoverForSummary();
+      const identity = sessionId || d.active?.sessionId;
+      const row = d.sessions.find((session) => session.id === identity);
+      if (!row) throw new Error("这段会话当前不在微信列表中，请重新选择");
+      if (d.active?.sessionId !== identity)
+        d = await this.native.request("select-session", {
+          id: identity,
+          signature: row.signature,
+          manual: true,
+        });
+      if (d.active?.sessionId !== identity)
+        throw new Error("无法核对需要总结的会话");
       this.context = d.active;
       const snapshot = parseSnapshot(await this.capture(), this.settings());
       if (!snapshot.titleVerified || !snapshot.messages.length)

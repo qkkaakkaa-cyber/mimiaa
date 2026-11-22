@@ -8,6 +8,7 @@ const DEFAULT_CALIBRATION = {
 };
 const DEFAULT_SETTINGS = {
   mode: "assist",
+  identity: { name: "回响助手", industry: "" },
   personality: { preset: "warm", custom: "", learnFromHistory: false },
   away: {
     enabled: false,
@@ -16,6 +17,12 @@ const DEFAULT_SETTINGS = {
     sessionId: "",
   },
   jobSource: { enabled: false, site: "https://thaichinesejobs.com" },
+  wechatTools: {
+    profileEnabled: false,
+    profileHistoryEnabled: false,
+    watchEnabled: false,
+    watchNames: [],
+  },
   reception: {
     privateChats: true,
     groupChats: true,
@@ -84,6 +91,17 @@ function validateSettings(input) {
   if (baseUrl) validateEndpoint(baseUrl);
   return {
     mode,
+    identity: {
+      name:
+        String(input.identity?.name || "")
+          .trim()
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .slice(0, 40) || DEFAULT_SETTINGS.identity.name,
+      industry: String(input.identity?.industry || "")
+        .trim()
+        .replace(/[\u0000-\u001f\u007f]/g, "")
+        .slice(0, 100),
+    },
     personality: {
       preset: ["warm", "witty", "direct", "steady"].includes(
         input.personality?.preset,
@@ -105,6 +123,21 @@ function validateSettings(input) {
     jobSource: {
       enabled: input.jobSource?.enabled === true,
       site: "https://thaichinesejobs.com",
+    },
+    wechatTools: {
+      profileEnabled: input.wechatTools?.profileEnabled === true,
+      profileHistoryEnabled: input.wechatTools?.profileHistoryEnabled === true,
+      watchEnabled: input.wechatTools?.watchEnabled === true,
+      watchNames: [
+        ...new Set(
+          (Array.isArray(input.wechatTools?.watchNames)
+            ? input.wechatTools.watchNames
+            : []
+          )
+            .map((name) => String(name).trim().slice(0, 100))
+            .filter(Boolean),
+        ),
+      ].slice(0, 50),
     },
     reception: {
       privateChats: input.reception?.privateChats !== false,

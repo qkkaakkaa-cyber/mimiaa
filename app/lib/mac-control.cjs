@@ -129,7 +129,7 @@ class MacControlBridge {
       ...(after?.active ? { calibration: after.active.calibration } : {}),
     };
   }
-  async selectSession({ id, signature }) {
+  async selectSession({ id, signature, manual = false }) {
     const ticket = this.epoch;
     const discover = () =>
       require("./discovery.cjs").discoverFromAX(
@@ -140,8 +140,9 @@ class MacControlBridge {
     if (!row || row.signature !== signature)
       throw new Error("会话列表已更新，稍后重新识别");
     if (before.active?.sessionId === id) return before;
-    if (this.idleTime() < 5) throw new Error("已发现消息，等待空闲时切换会话");
-    if (this.control.isWeChatActive?.())
+    if (!manual && this.idleTime() < 5)
+      throw new Error("已发现消息，等待空闲时切换会话");
+    if (!manual && this.control.isWeChatActive?.())
       throw new Error("你正在使用微信，AI 已自动暂停");
     const previousPID = this.control.frontmostPID?.();
     const target = { pid: before.pid, frame: before.frame };
@@ -159,8 +160,9 @@ class MacControlBridge {
       )
         throw new Error("会话列表或窗口位置已变化");
       this.control.clickInput({ ...target, input: again.point });
-      await this.sleep(5200);
-      if (this.idleTime() < 5) throw new Error("检测到人工操作，稍后继续接待");
+      await this.sleep(manual ? 420 : 5200);
+      if (!manual && this.idleTime() < 5)
+        throw new Error("检测到人工操作，稍后继续接待");
       if (ticket !== this.epoch) throw new Error("接待已暂停");
       const after = discover();
       if (
@@ -173,7 +175,11 @@ class MacControlBridge {
       // Only return focus if the user has not intervened. A real click in
       // WeChat leaves it active, and normal activity polling then pauses AI.
       try {
-        if (previousPID && this.idleTime() >= 5) {
+        if (
+          previousPID &&
+          previousPID !== target.pid &&
+          (manual || this.idleTime() >= 5)
+        ) {
           this.control.restoreFocus?.({ pid: previousPID });
           await this.sleep(250);
         }
