@@ -409,6 +409,10 @@ class FleetAgent extends Agent {
       this.store.conversationReport(this.context, snapshot, decision);
       this.status = "核心总结已保存到记录，未向对方发消息";
       return this.state();
+    } catch (error) {
+      this.status = "总结未完成：" + error.message;
+      this.store.log("warning", this.status);
+      throw error;
     } finally {
       this.busy = false;
       this.emit();

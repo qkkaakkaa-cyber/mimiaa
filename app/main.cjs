@@ -39,10 +39,26 @@ async function key() {
   try {
     const buffer = Buffer.from(store.data.encryptedKey, "base64");
     if (safeStorage.decryptStringAsync) {
-      const decrypted = await safeStorage.decryptStringAsync(buffer);
-      return typeof decrypted === "string" ? decrypted : decrypted.result;
+      let timer;
+      try {
+        const decrypted = await Promise.race([
+          safeStorage.decryptStringAsync(buffer),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("模型凭证解锁超时")),
+              15000,
+            );
+          }),
+        ]);
+        sessionKey =
+          typeof decrypted === "string" ? decrypted : decrypted.result;
+        return sessionKey;
+      } finally {
+        clearTimeout(timer);
+      }
     }
-    return safeStorage.decryptString(buffer);
+    sessionKey = safeStorage.decryptString(buffer);
+    return sessionKey;
   } catch {
     throw new Error("无法解锁已保存的模型密钥，请在回复规则中重新填写");
   }
