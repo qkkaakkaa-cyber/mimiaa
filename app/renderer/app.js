@@ -1,75 +1,716 @@
 (() => {
-  'use strict';
-  const api=window.huixiang,$=s=>document.querySelector(s),root=$('#app');
-  const paths={wave:'M3 10v4m4-8v12m5-15v18m5-15v12m4-8v4',home:'m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',chat:'M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-10A8.5 8.5 0 1 1 21 11.5ZM7 9h9M7 13h6',book:'M3 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H3Zm18 0h-6a3 3 0 0 0-3 3v14a4 4 0 0 1 4-3h5Z',sliders:'M4 5h16M4 12h16M4 19h16M8 3v4m8 3v4m-6 3v4',windows:'M3 3h18v18H3ZM3 8h18M8 8v13',clock:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v5l3 2',folder:'M3 6h6l2 2h10v12H3Z',pause:'M8 5v14M16 5v14',play:'m8 4 12 8-12 8Z',send:'m3 3 19 9-19 9 4-9Zm4 9h15',sparkles:'m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6ZM20 2v4m-2-2h4',plus:'M12 4v16M4 12h16',close:'m6 6 12 12M6 18 18 6',refresh:'M20 7v5h-5M4 17v-5h5M5.5 7a7 7 0 0 1 12-2L20 8M4 16l2.5 3a7 7 0 0 0 12-2',check:'m5 12 4 4L19 6',arrow:'M5 12h14m-6-6 6 6-6 6',scan:'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M4 12h16',shield:'m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Zm-4 9 3 3 5-6',hand:'M8 13V5a2 2 0 0 1 4 0v6-7a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-3-1-4-2l-5-6a2 2 0 0 1 3-3l2 2',monitor:'M3 3h18v14H3Zm5 18h8m-4-4v4',edit:'m15 4 5 5M4 20l4-1L21 6l-5-5L3 14Z',trash:'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7',key:'M15 4a5 5 0 1 1-2 9l-8 8H2v-3l8-8a5 5 0 0 1 5-6Z',info:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 7v7m0-10v.1'};
-  const icon=n=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[n]||paths.chat}"/></svg>`;
-  function icons(){root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});}
-  const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let workspace,agent={running:false,busy:false,status:'尚未连接微信',draft:null,latest:null},page='inbox',pending=false,demo=false,demoMessages=[],reply='',noticeTimer,windows=[],permissions=null,capture=null,calibration=null,calStep='title',selectedWindow=null,lastFocus=null;
-  const titles={inbox:'接待工作台',knowledge:'业务知识库',rules:'回复规则',channels:'渠道连接',logs:'接待记录'};
-  function notify(text){$('#notice').textContent=text;$('#notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').hidden=true,5000);}
-  async function action(fn){if(pending)return;pending=true;updateChrome();try{await fn();}catch(e){notify(e.message||'操作失败');}finally{pending=false;updateChrome();}}
-  async function reload(){const data=await api.load();workspace=data.workspace;agent=data.agent;return data;}
-  function intro(title,sub,side=''){return `<section class="e-intro"><div><h1>${title}</h1><p>${sub}</p></div>${side}</section>`;}
-  function updateChrome(){if(!workspace)return;$('#page-title').textContent=titles[page];root.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('e-active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});$('#run-status').innerHTML=`<span class="e-dot"></span>${demo?'示例演示':agent.running?'AI 接待中':'接待未开启'}`;$('#run-button').innerHTML=icon(agent.running?'pause':'play')+(agent.running?'暂停接待':'开始接待');$('#run-button').classList.toggle('e-primary',!agent.running);$('#run-button').disabled=pending||agent.busy||demo;$('#footer-state').textContent=demo?'演示模式 · 不会发送真实消息':agent.status;$('#demo-banner').hidden=!demo;
-    root.querySelectorAll('[data-needs-idle]').forEach(b=>b.disabled=pending||agent.busy);
-    root.querySelectorAll('[data-needs-draft]').forEach(b=>b.disabled=pending||agent.busy||(!demo&&!agent.draft));
+  "use strict";
+  const api = window.huixiang,
+    $ = (s) => document.querySelector(s),
+    root = $("#app");
+  const paths = {
+    wave: "M3 10v4m4-8v12m5-15v18m5-15v12m4-8v4",
+    home: "m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z",
+    chat: "M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-10A8.5 8.5 0 1 1 21 11.5ZM7 9h9M7 13h6",
+    book: "M3 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H3Zm18 0h-6a3 3 0 0 0-3 3v14a4 4 0 0 1 4-3h5Z",
+    sliders: "M4 5h16M4 12h16M4 19h16M8 3v4m8 3v4m-6 3v4",
+    windows: "M3 3h18v18H3ZM3 8h18M8 8v13",
+    clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v5l3 2",
+    folder: "M3 6h6l2 2h10v12H3Z",
+    pause: "M8 5v14M16 5v14",
+    play: "m8 4 12 8-12 8Z",
+    send: "m3 3 19 9-19 9 4-9Zm4 9h15",
+    sparkles:
+      "m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6ZM20 2v4m-2-2h4",
+    plus: "M12 4v16M4 12h16",
+    close: "m6 6 12 12M6 18 18 6",
+    refresh:
+      "M20 7v5h-5M4 17v-5h5M5.5 7a7 7 0 0 1 12-2L20 8M4 16l2.5 3a7 7 0 0 0 12-2",
+    check: "m5 12 4 4L19 6",
+    arrow: "M5 12h14m-6-6 6 6-6 6",
+    scan: "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M4 12h16",
+    shield: "m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Zm-4 9 3 3 5-6",
+    hand: "M8 13V5a2 2 0 0 1 4 0v6-7a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-3-1-4-2l-5-6a2 2 0 0 1 3-3l2 2",
+    monitor: "M3 3h18v14H3Zm5 18h8m-4-4v4",
+    edit: "m15 4 5 5M4 20l4-1L21 6l-5-5L3 14Z",
+    trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
+    key: "M15 4a5 5 0 1 1-2 9l-8 8H2v-3l8-8a5 5 0 0 1 5-6Z",
+    info: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 7v7m0-10v.1",
+  };
+  const icon = (n) =>
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[n] || paths.chat}"/></svg>`;
+  function icons() {
+    root.querySelectorAll("[data-icon]").forEach((el) => {
+      el.innerHTML = icon(el.dataset.icon);
+    });
   }
-  function welcome(){const connected=!!workspace.settings.windowId&&!!workspace.settings.expectedTitle,knowledge=workspace.faqs.some(f=>f.enabled);return intro('让每一份咨询，都有回应。','从一段微信对话开始，把重复的解释交给回响。')+`<div class="e-pagebody"><section class="welcome"><div><div class="welcome-symbol">${icon('chat')}</div><h2>你的接待助手，准备就绪。</h2><p>连接电脑上的微信，添加自己的常见问答。先确认草稿，再按需开启自动回复。</p><div class="welcome-actions"><button class="e-button e-primary" data-page="channels">${icon('windows')}${connected?'查看连接':'连接微信窗口'}</button><button class="e-button" data-action="enter-demo">先体验一下 ${icon('arrow')}</button></div></div><div>${[{name:'连接微信窗口',sub:'指定接待对象与窗口区域',done:connected},{name:'添加业务资料',sub:'写下服务介绍和常见问答',done:knowledge},{name:'开始接待',sub:'先从人工确认草稿开始',done:agent.running}].map((s,i)=>`<div class="setup-step ${s.done?'done':''}"><span class="step-no">${s.done?icon('check'):i+1}</span><span>${s.name}<small>${s.sub}</small></span></div>`).join('')}</div></section><div class="quiet-grid"><section class="e-section"><h3>${icon('shield')} 你掌握接待边界</h3><p>AI 不确定时留给你处理。关闭窗口、锁屏或休眠时，接待自动暂停。</p></section><section class="e-section"><h3>${icon('book')} 先用自己的资料</h3><p>常见问答无需 AI 密钥。接入模型后，还可以生成需要人工确认的回复草稿。</p></section></div></div>`;}
-  const demoSnapshot={messages:[{role:'in',text:'你好，你们周末营业吗？'},{role:'out',text:'您好，欢迎咨询。请问您想了解哪方面的服务？'},{role:'in',text:'周六下午能过去当面了解吗？'}]};
-  function inbox(){if(!demo&&!workspace.settings.windowId)return welcome();const s=workspace.settings,name=demo?'陈女士 · 示例':s.expectedTitle||'尚未指定会话',latest=demo?{messages:[...demoSnapshot.messages,...demoMessages]}:agent.latest;
-    const currentDraft=demo?{text:reply,source:'示例 · 接待安排'}:agent.draft;
-    return intro('让每一份咨询，都有回应。',demo?'体验 AI 草稿与人工接手，所有内容均为示例。':'只接待已指定的会话，重要的回复由你决定。',`<button class="e-button" data-action="read" data-needs-idle>${icon('scan')}读取当前会话</button>`)+`<div class="e-inbox"><section class="e-list"><div class="list-caption">当前接待范围 · 1 段对话</div><button class="e-contact e-selected"><span class="e-avatar">${esc(name.slice(0,1))}</span><span class="e-contact-copy"><span class="e-contact-name">${esc(name)}</span><span class="e-preview">${esc(latest?.messages.at(-1)?.text||'等待首次读取')}</span><span class="e-contact-bottom"><span>微信</span><span>${agent.running?'接待中':'人工确认'}</span></span></span></button><div class="e-empty">本版专注一段已选定的会话。<br>不会自动切换客户。</div><div class="control-row" style="padding:12px"><button class="e-button e-small" data-page="channels">管理连接</button></div></section><section class="e-chat"><div class="e-chatheader"><div class="e-chatidentity"><span class="e-avatar">${esc(name.slice(0,1))}</span><div><strong>${esc(name)}</strong><small>${demo?'示例会话':agent.running?'正在监听新消息':'自动接待已暂停'}</small></div></div><button class="e-button" data-action="takeover">${icon('hand')}我来接手</button></div><div class="e-chatcontext"><span class="e-tag e-green">${demo?'演示':s.mode==='auto'?'授权问答自动回复':'辅助草稿'}</span><span>发送前核对会话，结果不明时停止</span></div><div class="e-messages message-list">${latest?.messages.length?'<div class="e-date">当前窗口可见消息</div>'+latest.messages.map(m=>`<div class="e-message ${m.role==='out'?'e-out':''}"><div class="e-message-meta">${m.role==='out'?icon('sparkles')+'已发消息':m.role==='in'?esc(name):'待核对内容'}</div><div class="e-bubble">${esc(m.text)}</div></div>`).join(''):`<div class="empty-message">${icon('scan')}<strong>先读取当前微信会话</strong><span>读取窗口里可见的消息，再准备回复。</span><button class="e-button" data-action="read" data-needs-idle>读取会话</button></div>`}</div><div class="e-draft"><div class="e-draft-head"><span class="e-draft-title">${icon('sparkles')}回复草稿</span><small>${currentDraft?'确认内容后再发送':'根据资料准备回复'}</small></div><label class="e-sr" for="reply-input">回复内容</label><textarea class="e-editor" id="reply-input" placeholder="先点击“生成草稿”，再按需要修改内容。" ${!currentDraft?'disabled':''}>${esc(reply)}</textarea><div class="e-draft-footer"><span class="e-draft-source">${icon('book')}${esc(currentDraft?.source||'业务知识库')}</span><div class="e-draft-actions"><button class="e-button e-small" data-action="generate" data-needs-idle>${icon('sparkles')}生成草稿</button><button class="e-button e-primary e-small" data-action="confirm-send" data-needs-draft ${!currentDraft||pending||agent.busy?'disabled':''}>${icon('send')}确认发送</button></div></div><div class="draft-footnote">${demo?'演示操作不会发送到微信。':'只发送你确认的这一条回复；不会覆盖微信里已有的草稿。'}</div></div></section></div>`;}
-  function knowledge(){return intro('先了解你的生意，再替你开口。','问答资料保存在本机。自动回复只使用你明确授权的答案。')+`<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>业务介绍</h2><small>用于 AI 生成草稿</small></div><label class="e-field">告诉回响你提供什么服务<textarea id="business" rows="4" placeholder="例如：我们的服务范围、营业时间、预约方式，以及需要人工确认的事项。">${esc(workspace.settings.business)}</textarea></label><div class="control-row end"><button class="e-button e-primary" data-action="save-business">保存介绍</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>常见问答 <span class="muted">${workspace.faqs.length}</span></h2><button class="e-button e-primary" data-action="add-faq">${icon('plus')}添加问答</button></div>${workspace.faqs.length?workspace.faqs.map(f=>`<article class="faq-row"><div class="e-sectionhead"><strong>${esc(f.question)}</strong><span class="e-tag ${f.enabled?'e-green':''}">${f.enabled?'已启用':'已停用'}</span></div><p>${esc(f.answer)}</p><div class="faq-meta"><span>${f.autoSend?'已授权自动发送':'仅生成草稿'}</span><span>${esc(f.keywords.join(' · '))}</span><div class="control-row"><button class="e-iconbutton" data-edit-faq="${f.id}" aria-label="编辑问答">${icon('edit')}</button><button class="e-iconbutton" data-remove-faq="${f.id}" aria-label="移除问答">${icon('trash')}</button></div></div></article>`).join(''):'<div class="e-empty">还没有业务问答。先添加客户经常问的一个问题。</div>'}</section></div>`;}
-  function rules(){const s=workspace.settings;return intro('你定边界，回响按规则接待。','先从辅助草稿开始，熟悉后再授权常见问答自动回复。')+`<div class="e-pagebody"><section class="e-section"><h2>接待方式</h2><div class="settings-grid" style="margin-top:16px"><label class="e-field">回复模式<select id="reply-mode"><option value="assist" ${s.mode==='assist'?'selected':''}>辅助草稿 · 我确认后发送</option><option value="auto" ${s.mode==='auto'?'selected':''}>自动回复 · 只发送已授权的问答</option></select></label><label class="e-field">检查新消息的间隔<select id="interval">${[6,8,10,15,30,60].map(v=>`<option value="${v}" ${s.interval===v?'selected':''}>${v} 秒</option>`).join('')}</select></label></div><div class="inline-note">${icon('info')}<span>自动模式只发送“已授权自动发送”的问答。模型生成的内容始终需要你确认。</span></div><label class="e-rule"><span>报价和承诺，交给我确认<small>涉及价格、付款、退款、合同等内容时，不自动发送。</small></span><input class="e-switch" id="confirm-promises" type="checkbox" ${s.rules.confirmPromises?'checked':''}></label><div class="e-rule"><span>人工使用电脑时暂停<small>鼠标或键盘有操作时等待，停用至少 5 秒后继续。</small></span><span class="e-tag e-green">始终开启</span></div><div class="control-row end"><button class="e-button e-primary" data-action="save-rules">保存规则</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>AI 模型 · 可选</h2><span class="e-tag">支持兼容 OpenAI 的接口</span></div><p>不配置也能使用常见问答。生成 AI 草稿时，会把当前可见的会话文字和启用资料发到你指定的模型服务。</p><div class="settings-grid" style="margin-top:16px"><label class="e-field full">服务地址<input id="model-url" type="url" value="${esc(s.model.baseUrl)}" placeholder="https://你的服务地址/v1"><span class="field-note">填写到 /v1，不要添加 /chat/completions；本机服务支持 http://localhost。</span></label><label class="e-field">模型名称<input id="model-name" value="${esc(s.model.name)}" placeholder="服务商提供的模型名称"></label><label class="e-field">API 密钥<input id="model-key" type="password" autocomplete="off" placeholder="${workspace.hasApiKey?'已保存，留空保持原密钥':'本机模型可留空'}"></label></div><div class="control-row" style="margin-top:16px"><button class="e-button" data-action="test-model">测试连接</button><button class="e-button" data-action="clear-key">清除密钥</button><button class="e-button e-primary" data-action="save-model">保存模型设置</button></div><div class="help-inline">密钥通过系统加密后保存在本机；测试连接不会发送你的客户会话。</div></section></div>`;}
-  function channels(){const s=workspace.settings;return intro('连接你的微信，开始接待。','微信保持登录并展开聊天。每次只接待你指定的一段会话。',`<button class="e-button" data-action="refresh-permissions">${icon('refresh')}刷新状态</button>`)+`<div class="e-pagebody"><div class="connection-grid"><section class="e-section full"><div class="e-sectionhead"><h2>系统权限</h2><span class="e-tag">由你在系统设置中开启</span></div>${[{id:'screen',title:'屏幕录制',desc:'读取选定微信窗口里的可见消息。'},{id:'accessibility',title:'辅助功能',desc:'确认后在选定窗口中输入和发送回复。'}].map(p=>`<div class="permission-row">${icon(p.id==='screen'?'monitor':'hand')}<div><strong>${p.title}</strong><small>${p.desc}</small></div><span class="e-tag ${permissions?.[p.id]?'e-green':''}">${permissions?.[p.id]?'已授权':permissions?'未授权':'待检查'}</span><button class="e-button e-small" data-permission="${p.id}">${permissions?.[p.id]?'查看设置':'前往授权'}</button></div>`).join('')}<div class="help-inline">如果系统列表中显示 HuixiangBridge，请同时允许该本机组件。权限更新后可能需要重新打开软件。</div></section><section class="e-section full"><div class="e-sectionhead"><h2>微信窗口与接待对象</h2><button class="e-button e-small" data-action="load-windows">${icon('refresh')}查找微信窗口</button></div><div class="settings-grid"><label class="e-field">选择微信窗口<select id="wechat-window"><option value="">请选择已打开的微信窗口</option>${windows.map(w=>`<option value="${w.id}" ${Number(selectedWindow||s.windowId)===w.id?'selected':''}>${esc(w.title||'微信窗口')} · ${Math.round(w.width)} × ${Math.round(w.height)}</option>`).join('')}</select></label><label class="e-field">接待的会话名称<input id="expected-title" value="${esc(s.expectedTitle)}" placeholder="与微信聊天顶部名称完全一致"></label></div><div class="control-row" style="margin-top:16px"><button class="e-button" data-action="preview-window">${icon('scan')}预览并标记区域</button><button class="e-button e-primary" data-action="save-connection">保存连接</button></div>${s.windowId?`<div class="connection-status">已保存：${esc(s.expectedTitle||'未指定会话')} · 窗口 ${s.windowId}<br><small>开始前需核对截图中的标题、消息区和输入框位置。</small></div>`:''}<div class="help-inline">微信发送快捷键请设为 Enter。窗口布局变化后，重新预览并标记区域。</div></section><section class="e-section full"><h2>其他平台</h2><div class="future-channel"><span>WhatsApp</span><span class="e-tag">后续接入</span></div><div class="future-channel"><span>Telegram</span><span class="e-tag">后续接入</span></div></section></div></div>`;}
-  function logs(){return intro('接待进展，一目了然。','记录开始、暂停、草稿和发送结果。默认不把客户消息写入记录。')+`<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>最近记录</h2><button class="e-button e-small" data-action="refresh-logs">${icon('refresh')}刷新</button></div>${workspace.events.length?workspace.events.map(e=>`<div class="log-row"><time datetime="${esc(e.time)}">${new Date(e.time).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</time><span class="e-tag ${e.type==='warning'?'e-warm':''}">${({start:'开始',sent:'已发送',warning:'需检查',handoff:'待处理',draft:'草稿'})[e.type]||'记录'}</span><span>${esc(e.message)}</span></div>`).join(''):'<div class="e-empty">开始使用后，这里会显示接待记录。</div>'}</section></div>`;}
-  function render(){if(!workspace)return;$('#content').innerHTML=({inbox,knowledge,rules,channels,logs})[page]();icons();updateChrome();}
-  function modal(title,html,wide=false){lastFocus=document.activeElement;$('#modal-title').textContent=title;$('#modal-content').innerHTML=html;$('.e-modal').classList.toggle('wide',wide);$('#overlay').hidden=false;icons();$('#overlay button').focus();}
-  function closeModal(){$('#overlay').hidden=true;lastFocus?.focus();}
-  function faqForm(id){const f=workspace.faqs.find(x=>x.id===id)||{question:'',answer:'',keywords:[],enabled:true,autoSend:false};modal(id?'编辑问答':'添加常见问答',`<form id="faq-form" data-id="${esc(id||'')}"><label class="e-field">客户常问的问题<input id="faq-question" required maxlength="500" value="${esc(f.question)}" placeholder="例如：周末营业吗？"></label><label class="e-field">确定的回答<textarea id="faq-answer" required maxlength="2000" rows="4" placeholder="填写真实、可直接发给客户的答案">${esc(f.answer)}</textarea></label><label class="e-field">匹配关键词<input id="faq-keywords" value="${esc(f.keywords.join('，'))}" placeholder="例如：营业时间，周末营业"><span class="field-note">用逗号分隔；多个答案同时匹配时会交给你确认。</span></label><label class="checkline"><input id="faq-enabled" type="checkbox" ${f.enabled?'checked':''}><span>启用这条问答</span></label><label class="checkline"><input id="faq-auto" type="checkbox" ${f.autoSend?'checked':''}><span>允许自动发送此答案<small>仅在自动模式下生效。请先确认答案适用于日常接待。</small></span></label><div class="e-modal-actions"><button type="button" class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" type="submit">保存问答</button></div></form>`);}
-  function showCalibration(){const c=calibration;modal('标记微信窗口区域',`<div class="cal-options">${[['title','① 会话标题'],['messages','② 消息区域'],['composer','③ 输入框'],['input','④ 输入位置']].map(([id,label])=>`<button class="e-button e-small ${id===calStep?'active':''}" data-cal-step="${id}">${label}</button>`).join('')}</div><div class="calibration" id="calibration"><img src="data:image/png;base64,${capture.image}" alt="选定微信窗口的本机截图" draggable="false"><div id="cal-shapes"></div></div><div class="cal-help" id="cal-help"></div><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-action="apply-calibration">保存标记</button></div>`,true);drawCalibration();bindCalibration();}
-  function drawCalibration(){const labels={title:'会话标题',messages:'消息区域',composer:'输入框'};$('#cal-shapes').innerHTML=Object.entries(labels).map(([key,label])=>{const r=calibration[key];return `<div class="cal-box ${key}" style="left:${r.x*100}%;top:${r.y*100}%;width:${r.w*100}%;height:${r.h*100}%"><span class="cal-label">${label}</span></div>`;}).join('')+`<div class="cal-point" style="left:${calibration.input.x*100}%;top:${calibration.input.y*100}%"></div>`;$('#cal-help').textContent=calStep==='input'?'在输入框的空白文字区域单击，设置输入位置。':'拖动框选'+labels[calStep]+'。标题只包含客户名称；输入框不包含工具栏和“发送”按钮。';}
-  function bindCalibration(){const surface=$('#calibration');let origin=null;const point=e=>{const b=surface.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(e.clientX-b.left)/b.width)),y:Math.max(0,Math.min(1,(e.clientY-b.top)/b.height))};};surface.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(calStep==='input'){calibration.input=point(e);drawCalibration();return;}origin=point(e);surface.setPointerCapture(e.pointerId);});surface.addEventListener('pointermove',e=>{if(!origin)return;const p=point(e);calibration[calStep]={x:Math.min(origin.x,p.x),y:Math.min(origin.y,p.y),w:Math.abs(p.x-origin.x),h:Math.abs(p.y-origin.y)};drawCalibration();});surface.addEventListener('pointerup',()=>origin=null);surface.addEventListener('pointercancel',()=>origin=null);}
-  async function permissionRefresh(){permissions=await api.permissions();if(page==='channels')render();}
-  async function saveModel(){const model={baseUrl:$('#model-url').value.trim(),name:$('#model-name').value.trim()};const entered=$('#model-key').value;workspace=await api.saveSettings({...workspace.settings,model});if(entered){const result=await api.saveKey(entered);if(!result.persisted)notify('系统加密不可用，密钥只保留到本次退出。');}await reload();render();}
-  root.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;
-    if(b.dataset.page){page=b.dataset.page;if(page!=='inbox'&&demo){demo=false;reply=agent.draft?.text||'';}render();if(page==='channels')action(permissionRefresh);if(page==='logs')action(async()=>{await reload();render();});return;}
-    if(b.dataset.editFaq){faqForm(b.dataset.editFaq);return;}
-    if(b.dataset.removeFaq){modal('移除这条问答？',`<p>移除后，将不再用于接待回复。</p><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-confirm-remove="${b.dataset.removeFaq}">移除问答</button></div>`);return;}
-    if(b.dataset.confirmRemove){action(async()=>{workspace=await api.removeFAQ(b.dataset.confirmRemove);closeModal();render();notify('问答已移除');});return;}
-    if(b.dataset.permission){action(async()=>{const type=b.dataset.permission;if(!permissions?.[type])await api.requestPermission(type);await api.openSettings(type);await permissionRefresh();});return;}
-    if(b.dataset.calStep){calStep=b.dataset.calStep;root.querySelectorAll('[data-cal-step]').forEach(x=>x.classList.toggle('active',x.dataset.calStep===calStep));drawCalibration();return;}
-    const type=b.dataset.action;
-    if(type==='close-modal'){closeModal();return;}
-    if(type==='add-faq'){faqForm();return;}
-    if(type==='enter-demo'){demo=true;demoMessages=[];reply='可以先为您登记周六下午的到访意向。您大约几点方便？我请同事确认接待安排后再回复您。';render();return;}
-    if(type==='exit-demo'){demo=false;reply=agent.draft?.text||'';render();return;}
-    if(type==='read'){action(async()=>{if(demo){notify('已读取示例会话');return;}await api.read();reply='';render();});}
-    if(type==='generate'){action(async()=>{if(demo){reply='可以先为您登记周六下午的到访意向。您大约几点方便？我请同事确认接待安排后再回复您。';render();return;}const draft=await api.generate();reply=draft.text;render();});}
-    if(type==='confirm-send'){if(demo){if(reply.trim()){demoMessages.push({role:'out',text:reply});reply='';render();notify('回复已加入演示，没有发送到微信。');}return;}if(!reply.trim()){notify('请先填写回复内容');return;}modal('确认发送到微信',`<p>接待对象：<strong>${esc(workspace.settings.expectedTitle)}</strong></p><div class="e-bubble">${esc(reply)}</div><p>请确认当前微信里的接待对象和回复内容。</p><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-action="send-real">确认发送这一条</button></div>`);}
-    if(type==='send-real'){action(async()=>{await api.send(reply);reply='';closeModal();await reload();render();notify(agent.status);});}
-    if(type==='takeover'){if(demo){notify('演示：AI 已让出会话，你可以修改草稿。');$('#reply-input')?.focus();return;}action(async()=>{agent=await api.stop();render();notify('你已接手，自动接待已暂停。');});}
-    if(type==='toggle-run'){action(async()=>{agent=agent.running?await api.stop():await api.start();render();notify(agent.status);});}
-    if(type==='save-business'){action(async()=>{workspace=await api.saveSettings({...workspace.settings,business:$('#business').value});render();notify('业务介绍已保存');});}
-    if(type==='save-rules'){action(async()=>{workspace=await api.saveSettings({...workspace.settings,mode:$('#reply-mode').value,interval:Number($('#interval').value),rules:{confirmPromises:$('#confirm-promises').checked,pauseOnActivity:true}});render();notify('接待规则已保存');});}
-    if(type==='save-model')action(async()=>{await saveModel();notify('模型设置已保存');});
-    if(type==='test-model')action(async()=>{await saveModel();const result=await api.testModel();notify('模型连接成功：'+result.slice(0,60));});
-    if(type==='clear-key')action(async()=>{await api.saveKey('');await reload();render();notify('模型密钥已清除');});
-    if(type==='refresh-permissions')action(permissionRefresh);
-    if(type==='load-windows')action(async()=>{const result=await api.windows();windows=result.windows;render();notify(windows.length?'已找到微信窗口':'没有找到微信窗口，请打开并展开电脑微信。');});
-    if(type==='preview-window')action(async()=>{selectedWindow=Number($('#wechat-window').value);if(!selectedWindow)throw new Error('先选择一个微信窗口');capture=await api.preview(selectedWindow);calibration=structuredClone(workspace.settings.calibration);calStep='title';showCalibration();});
-    if(type==='apply-calibration'){const composer=calibration.composer,p=calibration.input;if(p.x<composer.x||p.x>composer.x+composer.w||p.y<composer.y||p.y>composer.y+composer.h){notify('输入位置必须位于输入框内');return;}if(['title','messages','composer'].some(k=>calibration[k].w<.03||calibration[k].h<.02)){notify('标记范围太小，请重新框选');return;}closeModal();notify('区域标记已准备好，请点击“保存连接”。');}
-    if(type==='save-connection')action(async()=>{const windowId=Number($('#wechat-window').value),expectedTitle=$('#expected-title').value.trim();if(!windowId||!expectedTitle)throw new Error('请选择窗口并填写接待会话名称');workspace=await api.saveSettings({...workspace.settings,windowId,expectedTitle,calibration:calibration||workspace.settings.calibration});reply='';render();notify('连接已保存，回到工作台读取并核对会话。');});
-    if(type==='refresh-logs')action(async()=>{await reload();render();});
-    if(type==='data-folder')action(()=>api.openDataFolder());
+  const esc = (x) =>
+    String(x ?? "").replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c],
+    );
+  let workspace,
+    agent = {
+      running: false,
+      busy: false,
+      status: "尚未连接微信",
+      draft: null,
+      latest: null,
+    },
+    page = "inbox",
+    pending = false,
+    demo = false,
+    demoMessages = [],
+    reply = "",
+    noticeTimer,
+    windows = [],
+    permissions = null,
+    capture = null,
+    calibration = null,
+    calStep = "title",
+    selectedWindow = null,
+    lastFocus = null;
+  const titles = {
+    inbox: "接待工作台",
+    knowledge: "业务知识库",
+    rules: "回复规则",
+    channels: "渠道连接",
+    logs: "接待记录",
+  };
+  function notify(text) {
+    $("#notice").textContent = text;
+    $("#notice").hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => ($("#notice").hidden = true), 5000);
+  }
+  async function action(fn) {
+    if (pending) return;
+    pending = true;
+    updateChrome();
+    try {
+      await fn();
+    } catch (e) {
+      notify(e.message || "操作失败");
+    } finally {
+      pending = false;
+      updateChrome();
+    }
+  }
+  async function reload() {
+    const data = await api.load();
+    workspace = data.workspace;
+    agent = data.agent;
+    return data;
+  }
+  function intro(title, sub, side = "") {
+    return `<section class="e-intro"><div><h1>${title}</h1><p>${sub}</p></div>${side}</section>`;
+  }
+  function updateChrome() {
+    if (!workspace) return;
+    $("#page-title").textContent = titles[page];
+    root.querySelectorAll("[data-page]").forEach((b) => {
+      b.classList.toggle("e-active", b.dataset.page === page);
+      b.setAttribute(
+        "aria-current",
+        b.dataset.page === page ? "page" : "false",
+      );
+    });
+    $("#run-status").innerHTML =
+      `<span class="e-dot"></span>${demo ? "示例演示" : agent.running ? "AI 接待中" : "接待未开启"}`;
+    $("#run-button").innerHTML =
+      icon(agent.running ? "pause" : "play") +
+      (agent.running ? "暂停接待" : "开始接待");
+    $("#run-button").classList.toggle("e-primary", !agent.running);
+    $("#run-button").disabled = pending || agent.busy || demo;
+    $("#footer-state").textContent = demo
+      ? "演示模式 · 不会发送真实消息"
+      : agent.status;
+    $("#demo-banner").hidden = !demo;
+    root
+      .querySelectorAll("[data-needs-idle]")
+      .forEach((b) => (b.disabled = pending || agent.busy));
+    root
+      .querySelectorAll("[data-needs-draft]")
+      .forEach(
+        (b) => (b.disabled = pending || agent.busy || (!demo && !agent.draft)),
+      );
+  }
+  function welcome() {
+    const connected =
+        !!workspace.settings.windowId && !!workspace.settings.expectedTitle,
+      knowledge = workspace.faqs.some((f) => f.enabled);
+    return (
+      intro(
+        "让每一份咨询，都有回应。",
+        "从一段微信对话开始，把重复的解释交给回响。",
+      ) +
+      `<div class="e-pagebody"><section class="welcome"><div><div class="welcome-symbol">${icon("chat")}</div><h2>你的接待助手，准备就绪。</h2><p>连接电脑上的微信，添加自己的常见问答。先确认草稿，再按需开启自动回复。</p><div class="welcome-actions"><button class="e-button e-primary" data-page="channels">${icon("windows")}${connected ? "查看连接" : "连接微信窗口"}</button><button class="e-button" data-action="enter-demo">先体验一下 ${icon("arrow")}</button></div></div><div>${[
+        {
+          name: "连接微信窗口",
+          sub: "指定接待对象与窗口区域",
+          done: connected,
+        },
+        {
+          name: "添加业务资料",
+          sub: "写下服务介绍和常见问答",
+          done: knowledge,
+        },
+        { name: "开始接待", sub: "先从人工确认草稿开始", done: agent.running },
+      ]
+        .map(
+          (s, i) =>
+            `<div class="setup-step ${s.done ? "done" : ""}"><span class="step-no">${s.done ? icon("check") : i + 1}</span><span>${s.name}<small>${s.sub}</small></span></div>`,
+        )
+        .join(
+          "",
+        )}</div></section><div class="quiet-grid"><section class="e-section"><h3>${icon("shield")} 你掌握接待边界</h3><p>AI 不确定时留给你处理。关闭窗口、锁屏或休眠时，接待自动暂停。</p></section><section class="e-section"><h3>${icon("book")} 先用自己的资料</h3><p>常见问答无需 AI 密钥。接入模型后，还可以生成需要人工确认的回复草稿。</p></section></div></div>`
+    );
+  }
+  const demoSnapshot = {
+    messages: [
+      { role: "in", text: "你好，你们周末营业吗？" },
+      { role: "out", text: "您好，欢迎咨询。请问您想了解哪方面的服务？" },
+      { role: "in", text: "周六下午能过去当面了解吗？" },
+    ],
+  };
+  function inbox() {
+    if (!demo && !workspace.settings.windowId) return welcome();
+    const s = workspace.settings,
+      name = demo ? "陈女士 · 示例" : s.expectedTitle || "尚未指定会话",
+      latest = demo
+        ? { messages: [...demoSnapshot.messages, ...demoMessages] }
+        : agent.latest;
+    const currentDraft = demo
+      ? { text: reply, source: "示例 · 接待安排" }
+      : agent.draft;
+    return (
+      intro(
+        "让每一份咨询，都有回应。",
+        demo
+          ? "体验 AI 草稿与人工接手，所有内容均为示例。"
+          : "只接待已指定的会话，重要的回复由你决定。",
+        `<button class="e-button" data-action="read" data-needs-idle>${icon("scan")}读取当前会话</button>`,
+      ) +
+      `<div class="e-inbox"><section class="e-list"><div class="list-caption">当前接待范围 · 1 段对话</div><button class="e-contact e-selected"><span class="e-avatar">${esc(name.slice(0, 1))}</span><span class="e-contact-copy"><span class="e-contact-name">${esc(name)}</span><span class="e-preview">${esc(latest?.messages.at(-1)?.text || "等待首次读取")}</span><span class="e-contact-bottom"><span>微信</span><span>${agent.running ? "接待中" : "人工确认"}</span></span></span></button><div class="e-empty">本版专注一段已选定的会话。<br>不会自动切换客户。</div><div class="control-row" style="padding:12px"><button class="e-button e-small" data-page="channels">管理连接</button></div></section><section class="e-chat"><div class="e-chatheader"><div class="e-chatidentity"><span class="e-avatar">${esc(name.slice(0, 1))}</span><div><strong>${esc(name)}</strong><small>${demo ? "示例会话" : agent.running ? "正在监听新消息" : "自动接待已暂停"}</small></div></div><button class="e-button" data-action="takeover">${icon("hand")}我来接手</button></div><div class="e-chatcontext"><span class="e-tag e-green">${demo ? "演示" : s.mode === "auto" ? "授权问答自动回复" : "辅助草稿"}</span><span>发送前核对会话，结果不明时停止</span></div><div class="e-messages message-list">${latest?.messages.length ? '<div class="e-date">当前窗口可见消息</div>' + latest.messages.map((m) => `<div class="e-message ${m.role === "out" ? "e-out" : ""}"><div class="e-message-meta">${m.role === "out" ? icon("sparkles") + "已发消息" : m.role === "in" ? esc(name) : "待核对内容"}</div><div class="e-bubble">${esc(m.text)}</div></div>`).join("") : `<div class="empty-message">${icon("scan")}<strong>先读取当前微信会话</strong><span>读取窗口里可见的消息，再准备回复。</span><button class="e-button" data-action="read" data-needs-idle>读取会话</button></div>`}</div><div class="e-draft"><div class="e-draft-head"><span class="e-draft-title">${icon("sparkles")}回复草稿</span><small>${currentDraft ? "确认内容后再发送" : "根据资料准备回复"}</small></div><label class="e-sr" for="reply-input">回复内容</label><textarea class="e-editor" id="reply-input" placeholder="先点击“生成草稿”，再按需要修改内容。" ${!currentDraft ? "disabled" : ""}>${esc(reply)}</textarea><div class="e-draft-footer"><span class="e-draft-source">${icon("book")}${esc(currentDraft?.source || "业务知识库")}</span><div class="e-draft-actions"><button class="e-button e-small" data-action="generate" data-needs-idle>${icon("sparkles")}生成草稿</button><button class="e-button e-primary e-small" data-action="confirm-send" data-needs-draft ${!currentDraft || pending || agent.busy ? "disabled" : ""}>${icon("send")}确认发送</button></div></div><div class="draft-footnote">${demo ? "演示操作不会发送到微信。" : "只发送你确认的这一条回复；不会覆盖微信里已有的草稿。"}</div></div></section></div>`
+    );
+  }
+  function knowledge() {
+    return (
+      intro(
+        "先了解你的生意，再替你开口。",
+        "问答资料保存在本机。自动回复只使用你明确授权的答案。",
+      ) +
+      `<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>业务介绍</h2><small>用于 AI 生成草稿</small></div><label class="e-field">告诉回响你提供什么服务<textarea id="business" rows="4" placeholder="例如：我们的服务范围、营业时间、预约方式，以及需要人工确认的事项。">${esc(workspace.settings.business)}</textarea></label><div class="control-row end"><button class="e-button e-primary" data-action="save-business">保存介绍</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>常见问答 <span class="muted">${workspace.faqs.length}</span></h2><button class="e-button e-primary" data-action="add-faq">${icon("plus")}添加问答</button></div>${workspace.faqs.length ? workspace.faqs.map((f) => `<article class="faq-row"><div class="e-sectionhead"><strong>${esc(f.question)}</strong><span class="e-tag ${f.enabled ? "e-green" : ""}">${f.enabled ? "已启用" : "已停用"}</span></div><p>${esc(f.answer)}</p><div class="faq-meta"><span>${f.autoSend ? "已授权自动发送" : "仅生成草稿"}</span><span>${esc(f.keywords.join(" · "))}</span><div class="control-row"><button class="e-iconbutton" data-edit-faq="${f.id}" aria-label="编辑问答">${icon("edit")}</button><button class="e-iconbutton" data-remove-faq="${f.id}" aria-label="移除问答">${icon("trash")}</button></div></div></article>`).join("") : '<div class="e-empty">还没有业务问答。先添加客户经常问的一个问题。</div>'}</section></div>`
+    );
+  }
+  function rules() {
+    const s = workspace.settings;
+    return (
+      intro(
+        "你定边界，回响按规则接待。",
+        "先从辅助草稿开始，熟悉后再授权常见问答自动回复。",
+      ) +
+      `<div class="e-pagebody"><section class="e-section"><h2>接待方式</h2><div class="settings-grid" style="margin-top:16px"><label class="e-field">回复模式<select id="reply-mode"><option value="assist" ${s.mode === "assist" ? "selected" : ""}>辅助草稿 · 我确认后发送</option><option value="auto" ${s.mode === "auto" ? "selected" : ""}>自动回复 · 只发送已授权的问答</option></select></label><label class="e-field">检查新消息的间隔<select id="interval">${[6, 8, 10, 15, 30, 60].map((v) => `<option value="${v}" ${s.interval === v ? "selected" : ""}>${v} 秒</option>`).join("")}</select></label></div><div class="inline-note">${icon("info")}<span>自动模式只发送“已授权自动发送”的问答。模型生成的内容始终需要你确认。</span></div><label class="e-rule"><span>报价和承诺，交给我确认<small>涉及价格、付款、退款、合同等内容时，不自动发送。</small></span><input class="e-switch" id="confirm-promises" type="checkbox" ${s.rules.confirmPromises ? "checked" : ""}></label><div class="e-rule"><span>人工使用电脑时暂停<small>鼠标或键盘有操作时等待，停用至少 5 秒后继续。</small></span><span class="e-tag e-green">始终开启</span></div><div class="control-row end"><button class="e-button e-primary" data-action="save-rules">保存规则</button></div></section><section class="e-section"><div class="e-sectionhead"><h2>AI 模型 · 可选</h2><span class="e-tag">支持兼容 OpenAI 的接口</span></div><p>不配置也能使用常见问答。生成 AI 草稿时，会把当前可见的会话文字和启用资料发到你指定的模型服务。</p><div class="settings-grid" style="margin-top:16px"><label class="e-field full">服务地址<input id="model-url" type="url" value="${esc(s.model.baseUrl)}" placeholder="https://你的服务地址/v1"><span class="field-note">填写到 /v1，不要添加 /chat/completions；本机服务支持 http://localhost。</span></label><label class="e-field">模型名称<input id="model-name" value="${esc(s.model.name)}" placeholder="服务商提供的模型名称"></label><label class="e-field">API 密钥<input id="model-key" type="password" autocomplete="off" placeholder="${workspace.hasApiKey ? "已保存，留空保持原密钥" : "本机模型可留空"}"></label></div><div class="control-row" style="margin-top:16px"><button class="e-button" data-action="test-model">测试连接</button><button class="e-button" data-action="clear-key">清除密钥</button><button class="e-button e-primary" data-action="save-model">保存模型设置</button></div><div class="help-inline">密钥通过系统加密后保存在本机；测试连接不会发送你的客户会话。</div></section></div>`
+    );
+  }
+  function channels() {
+    const s = workspace.settings;
+    return (
+      intro(
+        "连接你的微信，开始接待。",
+        "微信保持登录并展开聊天。每次只接待你指定的一段会话。",
+        `<button class="e-button" data-action="refresh-permissions">${icon("refresh")}刷新状态</button>`,
+      ) +
+      `<div class="e-pagebody"><div class="connection-grid"><section class="e-section full"><div class="e-sectionhead"><h2>系统权限</h2><span class="e-tag">由你在系统设置中开启</span></div>${[
+        {
+          id: "screen",
+          title: "屏幕录制",
+          desc: "读取选定微信窗口里的可见消息。",
+        },
+        {
+          id: "accessibility",
+          title: "辅助功能",
+          desc: "确认后在选定窗口中输入和发送回复。",
+        },
+      ]
+        .map(
+          (p) =>
+            `<div class="permission-row">${icon(p.id === "screen" ? "monitor" : "hand")}<div><strong>${p.title}</strong><small>${p.desc}</small></div><span class="e-tag ${permissions?.[p.id] ? "e-green" : ""}">${permissions?.[p.id] ? "已授权" : permissions ? "未授权" : "待检查"}</span><button class="e-button e-small" data-permission="${p.id}">${permissions?.[p.id] ? "查看设置" : "前往授权"}</button></div>`,
+        )
+        .join(
+          "",
+        )}<div class="help-inline">如果系统列表中显示 HuixiangBridge，请同时允许该本机组件。权限更新后可能需要重新打开软件。</div></section><section class="e-section full"><div class="e-sectionhead"><h2>微信窗口与接待对象</h2><button class="e-button e-small" data-action="load-windows">${icon("refresh")}查找微信窗口</button></div><div class="settings-grid"><label class="e-field">选择微信窗口<select id="wechat-window"><option value="">请选择已打开的微信窗口</option>${windows.map((w) => `<option value="${w.id}" ${Number(selectedWindow || s.windowId) === w.id ? "selected" : ""}>${esc(w.title || "微信窗口")} · ${Math.round(w.width)} × ${Math.round(w.height)}</option>`).join("")}</select></label><label class="e-field">接待的会话名称<input id="expected-title" value="${esc(s.expectedTitle)}" placeholder="与微信聊天顶部名称完全一致"></label></div><div class="control-row" style="margin-top:16px"><button class="e-button" data-action="preview-window">${icon("scan")}预览并标记区域</button><button class="e-button e-primary" data-action="save-connection">保存连接</button></div>${s.windowId ? `<div class="connection-status">已保存：${esc(s.expectedTitle || "未指定会话")} · 窗口 ${s.windowId}<br><small>开始前需核对截图中的标题、消息区和输入框位置。</small></div>` : ""}<div class="help-inline">微信发送快捷键请设为 Enter。窗口布局变化后，重新预览并标记区域。</div></section><section class="e-section full"><h2>其他平台</h2><div class="future-channel"><span>WhatsApp</span><span class="e-tag">后续接入</span></div><div class="future-channel"><span>Telegram</span><span class="e-tag">后续接入</span></div></section></div></div>`
+    );
+  }
+  function logs() {
+    return (
+      intro(
+        "接待进展，一目了然。",
+        "记录开始、暂停、草稿和发送结果。默认不把客户消息写入记录。",
+      ) +
+      `<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>最近记录</h2><button class="e-button e-small" data-action="refresh-logs">${icon("refresh")}刷新</button></div>${workspace.events.length ? workspace.events.map((e) => `<div class="log-row"><time datetime="${esc(e.time)}">${new Date(e.time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><span class="e-tag ${e.type === "warning" ? "e-warm" : ""}">${{ start: "开始", sent: "已发送", warning: "需检查", handoff: "待处理", draft: "草稿" }[e.type] || "记录"}</span><span>${esc(e.message)}</span></div>`).join("") : '<div class="e-empty">开始使用后，这里会显示接待记录。</div>'}</section></div>`
+    );
+  }
+  function render() {
+    if (!workspace) return;
+    $("#content").innerHTML = { inbox, knowledge, rules, channels, logs }[
+      page
+    ]();
+    icons();
+    updateChrome();
+  }
+  function modal(title, html, wide = false) {
+    lastFocus = document.activeElement;
+    $("#modal-title").textContent = title;
+    $("#modal-content").innerHTML = html;
+    $(".e-modal").classList.toggle("wide", wide);
+    $("#overlay").hidden = false;
+    icons();
+    $("#overlay button").focus();
+  }
+  function closeModal() {
+    $("#overlay").hidden = true;
+    lastFocus?.focus();
+  }
+  function faqForm(id) {
+    const f = workspace.faqs.find((x) => x.id === id) || {
+      question: "",
+      answer: "",
+      keywords: [],
+      enabled: true,
+      autoSend: false,
+    };
+    modal(
+      id ? "编辑问答" : "添加常见问答",
+      `<form id="faq-form" data-id="${esc(id || "")}"><label class="e-field">客户常问的问题<input id="faq-question" required maxlength="500" value="${esc(f.question)}" placeholder="例如：周末营业吗？"></label><label class="e-field">确定的回答<textarea id="faq-answer" required maxlength="2000" rows="4" placeholder="填写真实、可直接发给客户的答案">${esc(f.answer)}</textarea></label><label class="e-field">匹配关键词<input id="faq-keywords" value="${esc(f.keywords.join("，"))}" placeholder="例如：营业时间，周末营业"><span class="field-note">用逗号分隔；多个答案同时匹配时会交给你确认。</span></label><label class="checkline"><input id="faq-enabled" type="checkbox" ${f.enabled ? "checked" : ""}><span>启用这条问答</span></label><label class="checkline"><input id="faq-auto" type="checkbox" ${f.autoSend ? "checked" : ""}><span>允许自动发送此答案<small>仅在自动模式下生效。请先确认答案适用于日常接待。</small></span></label><div class="e-modal-actions"><button type="button" class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" type="submit">保存问答</button></div></form>`,
+    );
+  }
+  function showCalibration() {
+    const c = calibration;
+    modal(
+      "标记微信窗口区域",
+      `<div class="cal-options">${[
+        ["title", "① 会话标题"],
+        ["messages", "② 消息区域"],
+        ["composer", "③ 输入框"],
+        ["input", "④ 输入位置"],
+      ]
+        .map(
+          ([id, label]) =>
+            `<button class="e-button e-small ${id === calStep ? "active" : ""}" data-cal-step="${id}">${label}</button>`,
+        )
+        .join(
+          "",
+        )}</div><div class="calibration" id="calibration"><img src="data:image/png;base64,${capture.image}" alt="选定微信窗口的本机截图" draggable="false"><div id="cal-shapes"></div></div><div class="cal-help" id="cal-help"></div><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-action="apply-calibration">保存标记</button></div>`,
+      true,
+    );
+    drawCalibration();
+    bindCalibration();
+  }
+  function drawCalibration() {
+    const labels = {
+      title: "会话标题",
+      messages: "消息区域",
+      composer: "输入框",
+    };
+    $("#cal-shapes").innerHTML =
+      Object.entries(labels)
+        .map(([key, label]) => {
+          const r = calibration[key];
+          return `<div class="cal-box ${key}" style="left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%"><span class="cal-label">${label}</span></div>`;
+        })
+        .join("") +
+      `<div class="cal-point" style="left:${calibration.input.x * 100}%;top:${calibration.input.y * 100}%"></div>`;
+    $("#cal-help").textContent =
+      calStep === "input"
+        ? "在输入框的空白文字区域单击，设置输入位置。"
+        : "拖动框选" +
+          labels[calStep] +
+          "。标题只包含客户名称；输入框不包含工具栏和“发送”按钮。";
+  }
+  function bindCalibration() {
+    const surface = $("#calibration");
+    let origin = null;
+    const point = (e) => {
+      const b = surface.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)),
+        y: Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)),
+      };
+    };
+    surface.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      if (calStep === "input") {
+        calibration.input = point(e);
+        drawCalibration();
+        return;
+      }
+      origin = point(e);
+      surface.setPointerCapture(e.pointerId);
+    });
+    surface.addEventListener("pointermove", (e) => {
+      if (!origin) return;
+      const p = point(e);
+      calibration[calStep] = {
+        x: Math.min(origin.x, p.x),
+        y: Math.min(origin.y, p.y),
+        w: Math.abs(p.x - origin.x),
+        h: Math.abs(p.y - origin.y),
+      };
+      drawCalibration();
+    });
+    surface.addEventListener("pointerup", () => (origin = null));
+    surface.addEventListener("pointercancel", () => (origin = null));
+  }
+  async function permissionRefresh() {
+    permissions = await api.permissions();
+    if (page === "channels") render();
+  }
+  async function saveModel() {
+    const model = {
+      baseUrl: $("#model-url").value.trim(),
+      name: $("#model-name").value.trim(),
+    };
+    const entered = $("#model-key").value;
+    workspace = await api.saveSettings({ ...workspace.settings, model });
+    if (entered) {
+      const result = await api.saveKey(entered);
+      if (!result.persisted) notify("系统加密不可用，密钥只保留到本次退出。");
+    }
+    await reload();
+    render();
+  }
+  root.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.dataset.page) {
+      page = b.dataset.page;
+      if (page !== "inbox" && demo) {
+        demo = false;
+        reply = agent.draft?.text || "";
+      }
+      render();
+      if (page === "channels") action(permissionRefresh);
+      if (page === "logs")
+        action(async () => {
+          await reload();
+          render();
+        });
+      return;
+    }
+    if (b.dataset.editFaq) {
+      faqForm(b.dataset.editFaq);
+      return;
+    }
+    if (b.dataset.removeFaq) {
+      modal(
+        "移除这条问答？",
+        `<p>移除后，将不再用于接待回复。</p><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-confirm-remove="${b.dataset.removeFaq}">移除问答</button></div>`,
+      );
+      return;
+    }
+    if (b.dataset.confirmRemove) {
+      action(async () => {
+        workspace = await api.removeFAQ(b.dataset.confirmRemove);
+        closeModal();
+        render();
+        notify("问答已移除");
+      });
+      return;
+    }
+    if (b.dataset.permission) {
+      action(async () => {
+        const type = b.dataset.permission;
+        if (!permissions?.[type]) await api.requestPermission(type);
+        await api.openSettings(type);
+        await permissionRefresh();
+      });
+      return;
+    }
+    if (b.dataset.calStep) {
+      calStep = b.dataset.calStep;
+      root
+        .querySelectorAll("[data-cal-step]")
+        .forEach((x) =>
+          x.classList.toggle("active", x.dataset.calStep === calStep),
+        );
+      drawCalibration();
+      return;
+    }
+    const type = b.dataset.action;
+    if (type === "close-modal") {
+      closeModal();
+      return;
+    }
+    if (type === "add-faq") {
+      faqForm();
+      return;
+    }
+    if (type === "enter-demo") {
+      demo = true;
+      demoMessages = [];
+      reply =
+        "可以先为您登记周六下午的到访意向。您大约几点方便？我请同事确认接待安排后再回复您。";
+      render();
+      return;
+    }
+    if (type === "exit-demo") {
+      demo = false;
+      reply = agent.draft?.text || "";
+      render();
+      return;
+    }
+    if (type === "read") {
+      action(async () => {
+        if (demo) {
+          notify("已读取示例会话");
+          return;
+        }
+        await api.read();
+        reply = "";
+        render();
+      });
+    }
+    if (type === "generate") {
+      action(async () => {
+        if (demo) {
+          reply =
+            "可以先为您登记周六下午的到访意向。您大约几点方便？我请同事确认接待安排后再回复您。";
+          render();
+          return;
+        }
+        const draft = await api.generate();
+        reply = draft.text;
+        render();
+      });
+    }
+    if (type === "confirm-send") {
+      if (demo) {
+        if (reply.trim()) {
+          demoMessages.push({ role: "out", text: reply });
+          reply = "";
+          render();
+          notify("回复已加入演示，没有发送到微信。");
+        }
+        return;
+      }
+      if (!reply.trim()) {
+        notify("请先填写回复内容");
+        return;
+      }
+      modal(
+        "确认发送到微信",
+        `<p>接待对象：<strong>${esc(workspace.settings.expectedTitle)}</strong></p><div class="e-bubble">${esc(reply)}</div><p>请确认当前微信里的接待对象和回复内容。</p><div class="e-modal-actions"><button class="e-button" data-action="close-modal">取消</button><button class="e-button e-primary" data-action="send-real">确认发送这一条</button></div>`,
+      );
+    }
+    if (type === "send-real") {
+      action(async () => {
+        await api.send(reply);
+        reply = "";
+        closeModal();
+        await reload();
+        render();
+        notify(agent.status);
+      });
+    }
+    if (type === "takeover") {
+      if (demo) {
+        notify("演示：AI 已让出会话，你可以修改草稿。");
+        $("#reply-input")?.focus();
+        return;
+      }
+      action(async () => {
+        agent = await api.stop();
+        render();
+        notify("你已接手，自动接待已暂停。");
+      });
+    }
+    if (type === "toggle-run") {
+      action(async () => {
+        agent = agent.running ? await api.stop() : await api.start();
+        render();
+        notify(agent.status);
+      });
+    }
+    if (type === "save-business") {
+      action(async () => {
+        workspace = await api.saveSettings({
+          ...workspace.settings,
+          business: $("#business").value,
+        });
+        render();
+        notify("业务介绍已保存");
+      });
+    }
+    if (type === "save-rules") {
+      action(async () => {
+        workspace = await api.saveSettings({
+          ...workspace.settings,
+          mode: $("#reply-mode").value,
+          interval: Number($("#interval").value),
+          rules: {
+            confirmPromises: $("#confirm-promises").checked,
+            pauseOnActivity: true,
+          },
+        });
+        render();
+        notify("接待规则已保存");
+      });
+    }
+    if (type === "save-model")
+      action(async () => {
+        await saveModel();
+        notify("模型设置已保存");
+      });
+    if (type === "test-model")
+      action(async () => {
+        await saveModel();
+        const result = await api.testModel();
+        notify("模型连接成功：" + result.slice(0, 60));
+      });
+    if (type === "clear-key")
+      action(async () => {
+        await api.saveKey("");
+        await reload();
+        render();
+        notify("模型密钥已清除");
+      });
+    if (type === "refresh-permissions") action(permissionRefresh);
+    if (type === "load-windows")
+      action(async () => {
+        const result = await api.windows();
+        windows = result.windows;
+        render();
+        notify(
+          windows.length
+            ? "已找到微信窗口"
+            : "没有找到微信窗口，请打开并展开电脑微信。",
+        );
+      });
+    if (type === "preview-window")
+      action(async () => {
+        selectedWindow = Number($("#wechat-window").value);
+        if (!selectedWindow) throw new Error("先选择一个微信窗口");
+        capture = await api.preview(selectedWindow);
+        calibration = structuredClone(workspace.settings.calibration);
+        calStep = "title";
+        showCalibration();
+      });
+    if (type === "apply-calibration") {
+      const composer = calibration.composer,
+        p = calibration.input;
+      if (
+        p.x < composer.x ||
+        p.x > composer.x + composer.w ||
+        p.y < composer.y ||
+        p.y > composer.y + composer.h
+      ) {
+        notify("输入位置必须位于输入框内");
+        return;
+      }
+      if (
+        ["title", "messages", "composer"].some(
+          (k) => calibration[k].w < 0.03 || calibration[k].h < 0.02,
+        )
+      ) {
+        notify("标记范围太小，请重新框选");
+        return;
+      }
+      closeModal();
+      notify("区域标记已准备好，请点击“保存连接”。");
+    }
+    if (type === "save-connection")
+      action(async () => {
+        const windowId = Number($("#wechat-window").value),
+          expectedTitle = $("#expected-title").value.trim();
+        if (!windowId || !expectedTitle)
+          throw new Error("请选择窗口并填写接待会话名称");
+        workspace = await api.saveSettings({
+          ...workspace.settings,
+          windowId,
+          expectedTitle,
+          calibration: calibration || workspace.settings.calibration,
+        });
+        reply = "";
+        render();
+        notify("连接已保存，回到工作台读取并核对会话。");
+      });
+    if (type === "refresh-logs")
+      action(async () => {
+        await reload();
+        render();
+      });
+    if (type === "data-folder") action(() => api.openDataFolder());
   });
-  root.addEventListener('input',e=>{if(e.target.id==='reply-input')reply=e.target.value;});
-  root.addEventListener('change',e=>{if(e.target.id==='wechat-window'){selectedWindow=Number(e.target.value);capture=null;calibration=null;}});
-  root.addEventListener('submit',e=>{if(e.target.id!=='faq-form')return;e.preventDefault();action(async()=>{workspace=await api.saveFAQ({id:e.target.dataset.id,question:$('#faq-question').value,answer:$('#faq-answer').value,keywords:$('#faq-keywords').value,enabled:$('#faq-enabled').checked,autoSend:$('#faq-auto').checked});closeModal();render();notify('常见问答已保存');});});
-  root.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();if(e.key==='Tab'&&!$('#overlay').hidden){const all=[...$('#overlay').querySelectorAll('button,input,textarea,select')].filter(x=>!x.disabled);if(e.shiftKey&&document.activeElement===all[0]){e.preventDefault();all.at(-1).focus();}else if(!e.shiftKey&&document.activeElement===all.at(-1)){e.preventDefault();all[0].focus();}}});
-  if(!api){$('#content').innerHTML='<div class="startup-error"><h2>请从桌面软件打开回响</h2><p>这个页面需要随软件一起运行。</p></div>';return;}
-  api.onState(next=>{const changed=agent.latest?.fingerprint!==next.latest?.fingerprint||agent.draft?.id!==next.draft?.id||agent.running!==next.running;const newDraft=next.draft?.id&&next.draft.id!==agent.draft?.id;agent=next;if(newDraft)reply=next.draft.text;if(!next.draft&&!demo)reply='';updateChrome();if(page==='inbox'&&!demo&&changed)render();});
-  reload().then(data=>{$('#app-version').textContent='macOS 本地预览版 · '+data.version;render();}).catch(e=>{$('#content').innerHTML=`<div class="startup-error"><h2>暂时无法打开工作空间</h2><p>${esc(e.message)}</p></div>`;});
+  root.addEventListener("input", (e) => {
+    if (e.target.id === "reply-input") reply = e.target.value;
+  });
+  root.addEventListener("change", (e) => {
+    if (e.target.id === "wechat-window") {
+      selectedWindow = Number(e.target.value);
+      capture = null;
+      calibration = null;
+    }
+  });
+  root.addEventListener("submit", (e) => {
+    if (e.target.id !== "faq-form") return;
+    e.preventDefault();
+    action(async () => {
+      workspace = await api.saveFAQ({
+        id: e.target.dataset.id,
+        question: $("#faq-question").value,
+        answer: $("#faq-answer").value,
+        keywords: $("#faq-keywords").value,
+        enabled: $("#faq-enabled").checked,
+        autoSend: $("#faq-auto").checked,
+      });
+      closeModal();
+      render();
+      notify("常见问答已保存");
+    });
+  });
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+    if (e.key === "Tab" && !$("#overlay").hidden) {
+      const all = [
+        ...$("#overlay").querySelectorAll("button,input,textarea,select"),
+      ].filter((x) => !x.disabled);
+      if (e.shiftKey && document.activeElement === all[0]) {
+        e.preventDefault();
+        all.at(-1).focus();
+      } else if (!e.shiftKey && document.activeElement === all.at(-1)) {
+        e.preventDefault();
+        all[0].focus();
+      }
+    }
+  });
+  if (!api) {
+    $("#content").innerHTML =
+      '<div class="startup-error"><h2>请从桌面软件打开回响</h2><p>这个页面需要随软件一起运行。</p></div>';
+    return;
+  }
+  api.onState((next) => {
+    const changed =
+      agent.latest?.fingerprint !== next.latest?.fingerprint ||
+      agent.draft?.id !== next.draft?.id ||
+      agent.running !== next.running;
+    const newDraft = next.draft?.id && next.draft.id !== agent.draft?.id;
+    agent = next;
+    if (newDraft) reply = next.draft.text;
+    if (!next.draft && !demo) reply = "";
+    updateChrome();
+    if (page === "inbox" && !demo && changed) render();
+  });
+  reload()
+    .then((data) => {
+      $("#app-version").textContent = "macOS 本地预览版 · " + data.version;
+      render();
+    })
+    .catch((e) => {
+      $("#content").innerHTML =
+        `<div class="startup-error"><h2>暂时无法打开工作空间</h2><p>${esc(e.message)}</p></div>`;
+    });
   icons();
 })();

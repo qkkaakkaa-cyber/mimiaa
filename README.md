@@ -46,9 +46,10 @@ npm test
 npm run check
 npm start
 npm run build
+npm run deploy
 ```
 
-`npm run build` 生成应用包；构建脚本不会覆盖已有的 `dist/回响.app`。打包程序会包含 Electron 与 Chromium 许可证。
+`npm run build` 生成应用包；构建脚本不会覆盖已有的 `dist/回响.app`。`npm run deploy` 校验签名后安装到 `/Applications/回响.app`，保留已安装的上一版以便回退，用户资料不变。更新前先退出回响，安装完成后从“应用程序”打开。打包程序会包含 Electron 与 Chromium 许可证。
 
 自动测试使用合成 OCR 与内存桥接，不操作真实微信、不发送消息。原生组件可通过 `native/bin/HuixiangBridge self-test </dev/null` 运行纯数据自检。
 
