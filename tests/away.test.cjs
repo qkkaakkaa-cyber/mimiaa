@@ -119,6 +119,15 @@ test("普通接待模式不能用无来源闲聊动作绕过依据校验", () =>
     ),
   );
 });
+test("闲聊保留自然接话和第一个问题，去掉连着追问", () => {
+  const result = validateDecision(
+    { action: "chat", reply: "练手很适合从小工具开始。你现在在做什么？要帮老板也做一个吗？" },
+    [],
+    { ...DEFAULT_SETTINGS, away: { enabled: true } },
+    "想多练几天",
+  );
+  assert.equal(result.reply, "练手很适合从小工具开始。你现在在做什么？");
+});
 test("闲聊结束可以给对方确认摘要并记录核心事项", () => {
   const result = validateDecision(
     {
