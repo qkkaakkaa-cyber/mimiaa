@@ -3,6 +3,7 @@ const { Agent } = require("./agent.cjs");
 const { clean, parseSnapshot } = require("./domain.cjs");
 const { groupAllowed, isRecentWeChatTime } = require("./discovery.cjs");
 const pendingLifetime = 24 * 60 * 60 * 1000;
+const auditLifetime = 10 * 60 * 1000;
 const unknownDelivery = "这一段的发送结果待核实，请到微信确认";
 class FleetAgent extends Agent {
   constructor(options) {
@@ -317,9 +318,12 @@ class FleetAgent extends Agent {
       if (ticket !== this.epoch) return;
       if (this.needsBaseline) this.initializeQueue(d);
       const visible = new Map(d.sessions.map((row) => [row.id, row]));
+      const now = Date.now();
       for (const [id, job] of this.queue) {
         const current = visible.get(id);
-        if (Date.now() - job.queuedAt >= pendingLifetime ||
+        const expiredAudit = job.recentAudit && !job.opened &&
+          (current ? !isRecentWeChatTime(current.time) : now - job.queuedAt >= auditLifetime);
+        if (expiredAudit || now - job.queuedAt >= pendingLifetime ||
             (current && (current.signature !== job.signature || this.excluded(current))))
           this.queue.delete(id);
       }
@@ -363,7 +367,7 @@ class FleetAgent extends Agent {
         return;
       }
       const ready = [...this.queue.values()].filter((row) =>
-        (!row.retryAfter || row.retryAfter <= Date.now()) &&
+        (!row.retryAfter || row.retryAfter <= now) &&
         visible.has(row.id),
       );
       if (this.store.data.reception.modelBlockedUntil > Date.now()) {
@@ -372,17 +376,15 @@ class FleetAgent extends Agent {
       }
       const job = ready.find((candidate) => candidate.id === d.active?.sessionId) || ready[0];
       if (!job) {
-        this.status = this.queue.size
+        const visiblePending = [...this.queue.keys()].some((id) => visible.has(id));
+        this.status = visiblePending
           ? "接待中 · 待切换的会话稍后重试"
-          : "接待中 · 等待新的私聊和群聊消息";
+          : this.queue.size ? "接待中 · 部分待处理会话暂未出现在主列表"
+            : "接待中 · 等待新的私聊和群聊消息";
         if (!this.queue.size && this.idleTime() >= 15) this.scanIdleMoments?.();
         return;
       }
       const row = { ...job, ...visible.get(job.id) };
-      if (row.recentAudit && !row.opened && !isRecentWeChatTime(row.time)) {
-        this.queue.delete(row.id);
-        return;
-      }
       if (row.unreadBacklog && !row.opened) {
         const current = d.sessions.find((session) => session.id === row.id);
         if (!current || !current.unread || current.systemOnly || current.today === false) {

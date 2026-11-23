@@ -154,6 +154,23 @@ test("十分钟核对能跨午夜且排除旧日期和未来时间", () => {
   assert.equal(isRecentWeChatTime("00:05", now), false);
   assert.equal(isRecentWeChatTime("今天 00:03", now), true);
 });
+test("主列表里已看不到的过期巡检项不再显示为待切换", async (t) => {
+  const f = fixture(t);
+  f.store.saveReception({
+    enabled: true,
+    pending: {
+      session_item_列表外: {
+        signature: "old-audit",
+        queuedAt: Date.now() - 11 * 60 * 1000,
+        recentAudit: true,
+      },
+    },
+  });
+  await f.agent.start();
+  await f.agent.tick();
+  assert.deepEqual(f.store.data.reception.pending, {});
+  assert.match(f.agent.status, /等待新的/);
+});
 test("会话暂时无法取得焦点时，其他会话继续回复", async (t) => {
   const f = fixture(t);
   let failedSelections = 0;
