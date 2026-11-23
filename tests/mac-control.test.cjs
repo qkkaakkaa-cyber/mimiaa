@@ -248,4 +248,24 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   const background = await bridge.request("select-session", row);
   assert.equal(background.active.expectedTitle, "乙");
   assert.equal(front, 99);
+
+  selected = "甲";
+  let elapsed = 0;
+  control.selectChatRow = () => {};
+  bridge.sleep = async (ms) => {
+    elapsed += ms;
+    if (elapsed >= 800) selected = "乙";
+  };
+  const delayed = await bridge.request("select-session", row);
+  assert.equal(delayed.active.expectedTitle, "乙");
+  assert.equal(front, 99);
+
+  selected = "甲";
+  restored = false;
+  control.selectChatRow = () => { throw new Error("后台选择暂不可用"); };
+  control.focus = () => { front = 1; };
+  bridge.sleep = async () => {};
+  const fallback = await bridge.request("select-session", row);
+  assert.equal(fallback.active.expectedTitle, "乙");
+  assert.equal(restored, true);
 });

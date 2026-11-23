@@ -274,10 +274,27 @@ void selectChatRow(napi_env env,napi_value params) {
   CFRelease(list);
   if(!row)throw std::runtime_error("微信会话已离开主列表");
   const CGRect visible=CGRectIntersection(CGRectIntersection(bounds(row),listFrame),target.frame);
-  CFRelease(row);
-  if(CGRectIsNull(visible)||visible.size.height<12||visible.size.width<25)
+  if(CGRectIsNull(visible)||visible.size.height<12||visible.size.width<25) {
+    CFRelease(row);
     throw std::runtime_error("微信会话暂时不可见");
-  if (weChatInUse()) throw std::runtime_error("你正在使用微信，稍后继续接待");
+  }
+  CFArrayRef actions=nullptr;
+  bool supportsPress=false;
+  if (AXUIElementCopyActionNames(row,&actions)==kAXErrorSuccess&&actions)
+    supportsPress=CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXPressAction);
+  if(actions)CFRelease(actions);
+  if (weChatInUse()) {
+    CFRelease(row);
+    throw std::runtime_error("你正在使用微信，稍后继续接待");
+  }
+  if (supportsPress) {
+    const AXError result=AXUIElementPerformAction(row,kAXPressAction);
+    CFRelease(row);
+    if (result!=kAXErrorSuccess)
+      throw std::runtime_error("微信会话的辅助功能操作未确认");
+    return;
+  }
+  CFRelease(row);
   const CGPoint point=CGPointMake(CGRectGetMidX(visible),CGRectGetMidY(visible));
   CGEventRef down=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
   CGEventRef up=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);

@@ -414,7 +414,7 @@ class FleetAgent extends Agent {
         });
       } catch (error) {
         if (ticket !== this.epoch) return;
-        this.retry(activeJob, "这段会话暂未切换，其他会话继续接待，稍后重试");
+        this.retry(activeJob, "这段会话暂未切换，其他会话继续接待，稍后重试", error);
         return;
       }
       if (ticket !== this.epoch) return;

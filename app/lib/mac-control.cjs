@@ -148,39 +148,51 @@ class MacControlBridge {
       throw new Error("你正在使用微信，AI 已自动暂停");
     const previousPID = this.control.frontmostPID?.();
     const target = { pid: before.pid, frame: before.frame };
+    const sameSelectionWindow = (view) =>
+      view.windowId === before.windowId && sameWindow(view, target);
     const isSelected = (view) =>
-      sameWindow(view, target) &&
+      sameSelectionWindow(view) &&
       view.active?.sessionId === id &&
       view.active.expectedTitle === row.name;
     const verifyRow = (view) => {
       const current = view.sessions.find((session) => session.id === id);
-      if (!current || current.signature !== signature || !sameWindow(view, target))
+      if (!current || current.signature !== signature || !sameSelectionWindow(view))
         throw new Error("会话列表或窗口位置已变化");
       return current;
+    };
+    const checkSelection = () => {
+      if (ticket !== this.epoch) throw new Error("接待已暂停");
+      if (!manual && this.control.isWeChatInUse?.())
+        throw new Error("你正在使用微信，稍后继续接待");
     };
     this.navigating = true;
     try {
       if (!manual && this.control.selectChatRow) {
-        this.control.selectChatRow({ ...target, id });
-        await this.sleep(500);
-        if (ticket !== this.epoch) throw new Error("接待已暂停");
-        const selected = discover();
-        if (this.control.isWeChatInUse?.())
-          throw new Error("你正在使用微信，稍后继续接待");
-        if (isSelected(selected)) return selected;
-        verifyRow(selected);
+        try {
+          this.control.selectChatRow({ ...target, id });
+        } catch {
+          // An AX action can fail before or after WeChat receives it.
+          // Always read back the selection before using the foreground path.
+        }
+        for (const delay of [300, 350, 500, 500]) {
+          await this.sleep(delay);
+          checkSelection();
+          const selected = discover();
+          if (isSelected(selected)) return selected;
+          verifyRow(selected);
+        }
         if (this.idleTime() < 5)
           throw new Error("已发现消息，等待空闲时切换会话");
       }
       this.control.focus(target);
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 16; i++) {
         await this.sleep(100);
-        if (ticket !== this.epoch) throw new Error("接待已暂停");
+        checkSelection();
         if (!this.control.frontmostPID || this.control.frontmostPID() === target.pid) break;
         if (!manual && this.idleTime() < 5)
           throw new Error("检测到人工操作，稍后继续接待");
       }
-      if (ticket !== this.epoch) throw new Error("接待已暂停");
+      checkSelection();
       if (this.control.frontmostPID && this.control.frontmostPID() !== target.pid)
         throw new Error("微信暂未取得窗口焦点");
       const again = verifyRow(discover());
@@ -208,6 +220,9 @@ class MacControlBridge {
           this.control.restoreFocus?.({ pid: previousPID });
           await this.sleep(250);
         }
+      } catch {
+        // Restoring the previous app is best effort. The chat was verified
+        // independently, and the send path will verify it again.
       } finally {
         this.navigating = false;
       }
