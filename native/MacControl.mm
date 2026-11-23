@@ -534,6 +534,59 @@ void restoreFocus(napi_env env,napi_value params){
 }
 napi_value RestoreFocus(napi_env e,napi_callback_info i){return run(e,i,restoreFocus);}
 
+napi_value RevealWeChatWindow(napi_env env,napi_callback_info) {
+  @autoreleasepool {
+    try {
+      if (!AXIsProcessTrusted()) throw std::runtime_error("请先为微响开启辅助功能权限");
+      if (weChatInUse()) throw std::runtime_error("你正在使用微信，稍后恢复窗口");
+      NSRunningApplication *wechat=nil;
+      for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
+        if (isWeChat(app)) { wechat=app; break; }
+      }
+      if (!wechat) throw std::runtime_error("请先登录电脑微信");
+      const pid_t pid=wechat.processIdentifier;
+      AXUIElementRef app=AXUIElementCreateApplication(pid);
+      CFTypeRef windows=nullptr;
+      AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&windows);
+      CFRelease(app);
+      AXUIElementRef main=nullptr;
+      if (windows&&CFGetTypeID(windows)==CFArrayGetTypeID()) {
+        const CFArrayRef list=(CFArrayRef)windows;
+        for (CFIndex i=0;i<CFArrayGetCount(list);i++) {
+          AXUIElementRef candidate=(AXUIElementRef)CFArrayGetValueAtIndex(list,i);
+          AXUIElementRef split=findElement(candidate,@"main_window_main_splitter_view",nil);
+          NSString *title=stringAttr(candidate,kAXTitleAttribute);
+          if (split) CFRelease(split);
+          if (!split && ![title isEqualToString:@"WeChat"] && ![title isEqualToString:@"微信"]) continue;
+          if (!main || split) {
+            if (main) CFRelease(main);
+            main=(AXUIElementRef)CFRetain(candidate);
+          }
+          if (split) break;
+        }
+      }
+      if (windows) CFRelease(windows);
+      if (!main) throw std::runtime_error("微信主窗口尚未打开");
+      if (wechat.hidden) [wechat unhide];
+      CFTypeRef minimized=nullptr;
+      AXUIElementCopyAttributeValue(main,kAXMinimizedAttribute,&minimized);
+      const bool wasMinimized=minimized && CFGetTypeID(minimized)==CFBooleanGetTypeID() &&
+        CFBooleanGetValue((CFBooleanRef)minimized);
+      if (minimized) CFRelease(minimized);
+      const AXError result=wasMinimized
+        ? AXUIElementSetAttributeValue(main,kAXMinimizedAttribute,kCFBooleanFalse) : kAXErrorSuccess;
+      CFRelease(main);
+      if (result!=kAXErrorSuccess) throw std::runtime_error("微信主窗口暂时无法取消最小化");
+      napi_value out;
+      napi_create_int32(env,pid,&out);
+      return out;
+    } catch (const std::exception &error) {
+      napi_throw_error(env,nullptr,error.what());
+      return nullptr;
+    }
+  }
+}
+
 napi_value Init(napi_env env,napi_value exports){
   napi_property_descriptor methods[]={
     {"setComposer",nullptr,SetComposer,nullptr,nullptr,nullptr,napi_default,nullptr},
@@ -543,6 +596,7 @@ napi_value Init(napi_env env,napi_value exports){
     {"stopWeChatActivityMonitor",nullptr,StopWeChatActivityMonitor,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"frontmostPID",nullptr,FrontmostPID,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"restoreFocus",nullptr,RestoreFocus,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"revealWeChatWindow",nullptr,RevealWeChatWindow,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"capture",nullptr,Capture,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"screenTrusted",nullptr,ScreenTrusted,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"requestScreen",nullptr,RequestScreen,nullptr,nullptr,nullptr,napi_default,nullptr},

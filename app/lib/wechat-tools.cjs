@@ -312,13 +312,55 @@ class WeChatTools {
     if (!has(current, "contact_list"))
       this.tap(current, button(current, "通讯录"));
   }
-  async openChats() {
+  async openChats({ allowed = () => true, force = false } = {}) {
+    if (!allowed()) return;
     const main = this.mainView();
     this.control.focus(main);
     await this.native.sleep(300);
+    if (!allowed()) return;
     const current = this.mainView();
-    if (!has(current, "session_list"))
+    if (current.pid !== main.pid || current.windowId !== main.windowId)
+      throw new Error("微信主窗口已变化");
+    if (force || !has(current, "session_list"))
       this.tap(current, button(current, "WeChat") || button(current, "微信"));
+  }
+  async recoverChats() {
+    const ticket = this.native.epoch;
+    const allowed = () => ticket === this.native.epoch &&
+      this.native.idleTime() >= 8 && !this.control.isWeChatInUse?.();
+    if (!allowed()) return;
+    const previousPID = this.control.frontmostPID();
+    this.native.navigating = true;
+    let pid;
+    try {
+      pid = this.control.revealWeChatWindow();
+      for (const delay of [300, 450, 750]) {
+        await this.native.sleep(delay);
+        if (!allowed()) return;
+        let main;
+        try {
+          main = this.mainView();
+        } catch {
+          continue;
+        }
+        if (main.pid !== pid) throw new Error("微信主窗口已变化");
+        const list = main.items.find((item) => item.id === "session_list");
+        const folded = [list?.label, list?.title, list?.value].some((value) => value === "折叠的聊天");
+        if (!list || folded) {
+          await this.openChats({ allowed, force: folded });
+          await this.native.sleep(350);
+        }
+        return;
+      }
+      throw new Error("微信主窗口暂未显示");
+    } finally {
+      try {
+        if (pid && previousPID && pid !== previousPID && allowed())
+          this.control.restoreFocus({ pid: previousPID });
+      } finally {
+        this.native.navigating = false;
+      }
+    }
   }
   async openChatsForSummary() {
     const before = this.control.frontmostPID();

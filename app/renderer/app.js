@@ -225,7 +225,7 @@
         "微信已在，助手就在。",
         "自动识别原生微信，无需手动选择窗口或填写聊天名称。",
       ) +
-      `<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>连接微信</h2><span class="e-tag ${agent.discovered ? "e-green" : ""}">${agent.discovered ? "已连接" : "待检查"}</span></div><p>保持电脑微信登录、聊天列表展开。微响会持续发现新消息。当前聊天支持后台接话；切换其他会话时会避让你的电脑操作。</p><button class="e-button e-primary" data-action="discover" style="margin-top:16px">${icon("scan")}自动检查微信</button><button class="e-button" data-action="local-check" style="margin-top:10px">本机读取自检</button><div class="help-inline">${agent.discovered ? `已发现 ${agent.sessions?.length || 0} 段会话。` : "检查只读取本机界面，不发送消息。"} 新消息需出现在微信会话列表中；不接管最小化或锁屏中的微信。</div></section><section class="e-section"><div class="e-sectionhead"><h2>系统权限</h2><button class="e-button e-small" data-action="refresh-permissions">刷新</button></div>${[
+      `<div class="e-pagebody"><section class="e-section"><div class="e-sectionhead"><h2>连接微信</h2><span class="e-tag ${agent.discovered ? "e-green" : ""}">${agent.discovered ? "已连接" : "待检查"}</span></div><p>保持电脑微信登录。微响会持续发现新消息，空闲时可以自动恢复窗口并返回聊天列表。</p><button class="e-button e-primary" data-action="discover" style="margin-top:16px">${icon("scan")}自动检查微信</button><button class="e-button" data-action="local-check" style="margin-top:10px">本机读取自检</button><div class="help-inline">${agent.discovered ? `已发现 ${agent.sessions?.length || 0} 段会话。` : "检查只读取本机界面，不发送消息。"} 接待使用微信主会话列表。锁屏时接待暂停。</div></section><section class="e-section"><div class="e-sectionhead"><h2>系统权限</h2><button class="e-button e-small" data-action="refresh-permissions">刷新</button></div>${[
         {
           id: "accessibility",
           name: "辅助功能",

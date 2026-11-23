@@ -490,6 +490,7 @@ app
     agent.learnContact = (contact, messages) =>
       wechatTools.learnFromSnapshot(contact, messages);
     agent.openChatsForSummary = () => wechatTools.openChatsForSummary();
+    agent.recoverChatList = () => wechatTools.recoverChats();
     const activityPoll = setInterval(() => {
       try {
         if (!agent.running) {

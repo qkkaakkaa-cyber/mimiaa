@@ -171,6 +171,30 @@ test("主列表里已看不到的过期巡检项不再显示为待切换", async
   assert.deepEqual(f.store.data.reception.pending, {});
   assert.match(f.agent.status, /等待新的/);
 });
+test("微信主列表不可见时等电脑空闲再恢复，恢复后继续巡检", async (t) => {
+  const f = fixture(t);
+  const request = f.native.request;
+  let hidden = true, recoveries = 0, idle = 2;
+  f.agent.idleTime = () => idle;
+  f.native.request = async (cmd, payload) => {
+    if (cmd === "discover" && hidden)
+      throw new Error("请展开微信的聊天列表，微响会自动识别");
+    return request(cmd, payload);
+  };
+  f.agent.recoverChatList = async () => {
+    recoveries++;
+    hidden = false;
+  };
+  await f.agent.start();
+  await f.agent.tick();
+  assert.equal(recoveries, 0);
+  idle = 9;
+  await f.agent.tick();
+  assert.equal(recoveries, 1);
+  f.rows[0].signature = "new-after-restore";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
 test("会话暂时无法取得焦点时，其他会话继续回复", async (t) => {
   const f = fixture(t);
   let failedSelections = 0;

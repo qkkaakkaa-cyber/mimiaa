@@ -15,6 +15,7 @@ class FleetAgent extends Agent {
     this.tasks = [];
     this.processed = 0;
     this.activityPaused = false;
+    this.nextWindowRecovery = 0;
   }
   state() {
     return {
@@ -254,6 +255,7 @@ class FleetAgent extends Agent {
     if (!permissions.screen)
       throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
     this.recentlyChecked.clear();
+    this.nextWindowRecovery = 0;
     for (const [id, row] of Object.entries(this.store.data.reception.pending)) {
       if (Date.now() - row.queuedAt < pendingLifetime)
         this.queue.set(id, { id, ...row });
@@ -310,12 +312,26 @@ class FleetAgent extends Agent {
       let d;
       try {
         d = await this.discover();
-      } catch {
+      } catch (error) {
         this.discovery = null;
         this.status = "等待微信聊天列表，连接恢复后继续接待";
-        return;
+        if (!this.recoverChatList || !/请展开微信的聊天列表/.test(error.message) ||
+            Date.now() < this.nextWindowRecovery || this.activityPaused ||
+            this.idleTime() < 8 || this.native.control?.isWeChatInUse?.()) return;
+        this.nextWindowRecovery = Date.now() + 20000;
+        this.phase("正在恢复微信主窗口和聊天列表");
+        try {
+          await this.recoverChatList();
+          if (ticket !== this.epoch) return;
+          d = await this.discover();
+        } catch {
+          if (ticket === this.epoch)
+            this.status = "微信主列表暂不可用，稍后自动恢复";
+          return;
+        }
       }
       if (ticket !== this.epoch) return;
+      this.nextWindowRecovery = 0;
       if (this.needsBaseline) this.initializeQueue(d);
       const visible = new Map(d.sessions.map((row) => [row.id, row]));
       const now = Date.now();
