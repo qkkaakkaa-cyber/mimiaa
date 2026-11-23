@@ -159,6 +159,13 @@ NSString *stringAttr(AXUIElementRef node, CFStringRef key) {
   if(value && CFGetTypeID(value)==CFStringGetTypeID())result=[(__bridge NSString*)value copy];
   if(value)CFRelease(value);return result;
 }
+bool boolAttr(AXUIElementRef element, CFStringRef key) {
+  CFTypeRef value=nullptr;
+  AXUIElementCopyAttributeValue(element,key,&value);
+  const bool result=value&&CFGetTypeID(value)==CFBooleanGetTypeID()&&CFBooleanGetValue((CFBooleanRef)value);
+  if (value) CFRelease(value);
+  return result;
+}
 NSDictionary *rectJSON(CGRect r){return @{@"x":@(r.origin.x),@"y":@(r.origin.y),@"w":@(r.size.width),@"h":@(r.size.height)};}
 void walk(AXUIElementRef node,NSMutableArray *items,int depth,int &count) {
   if(depth>16 || count++>3500)return;
@@ -179,11 +186,19 @@ napi_value inspectWindow(napi_env env,bool social){
   NSRunningApplication *running=nil;
   for(NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications)if([@[@"com.tencent.xinWeChat",@"com.tencent.WeChat"] containsObject:app.bundleIdentifier]){running=app;break;}
   if(!running)throw std::runtime_error("请先登录电脑微信");
+  if(!social&&running.hidden)throw std::runtime_error("请展开微信的聊天列表，微信主窗口已隐藏");
   AXUIElementRef app=AXUIElementCreateApplication(running.processIdentifier);CFTypeRef windows=nullptr;
   AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&windows);CFRelease(app);
   NSMutableArray *results=[NSMutableArray array];
+  bool mainMinimized=false;
   if(windows && CFGetTypeID(windows)==CFArrayGetTypeID())for(CFIndex i=0;i<CFArrayGetCount((CFArrayRef)windows);i++){
-    AXUIElementRef win=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)windows,i);NSMutableArray *items=[NSMutableArray array];int count=0;walk(win,items,0,count);
+    AXUIElementRef win=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)windows,i);
+    if(!social&&boolAttr(win,kAXMinimizedAttribute)){
+      NSString *title=stringAttr(win,kAXTitleAttribute);
+      if ([title isEqualToString:@"WeChat"] || [title isEqualToString:@"微信"])mainMinimized=true;
+      continue;
+    }
+    NSMutableArray *items=[NSMutableArray array];int count=0;walk(win,items,0,count);
     BOOL hasSessions=NO;for(NSDictionary *item in items)if([item[@"id"] isEqual:@"session_list"])hasSessions=YES;
     if(!social&&!hasSessions)continue;
     CGRect frame=bounds(win);NSNumber *windowID=nil;
@@ -193,6 +208,8 @@ napi_value inspectWindow(napi_env env,bool social){
     [results addObject:@{@"pid":@(running.processIdentifier),@"frame":rectJSON(frame),@"windowId":windowID,@"items":items,@"title":stringAttr(win,kAXTitleAttribute)}];if(!social)break;
   }
   if(windows)CFRelease(windows);
+  if (!results.count && mainMinimized)
+    throw std::runtime_error("请展开微信的聊天列表，微信主窗口已最小化");
   if(!results.count)throw std::runtime_error(social?"请打开电脑微信":"请展开微信的聊天列表，微响会自动识别");
   NSData *json=[NSJSONSerialization dataWithJSONObject:social?(id)results:results.firstObject options:0 error:nil];napi_value out;napi_create_string_utf8(env,(const char*)json.bytes,json.length,&out);return out;
  }catch(const std::exception &error){napi_throw_error(env,nullptr,error.what());return nullptr;}}
@@ -534,6 +551,31 @@ void restoreFocus(napi_env env,napi_value params){
 }
 napi_value RestoreFocus(napi_env e,napi_callback_info i){return run(e,i,restoreFocus);}
 
+AXUIElementRef weChatMainWindow(pid_t pid) {
+  AXUIElementRef app=AXUIElementCreateApplication(pid);
+  CFTypeRef windows=nullptr;
+  AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&windows);
+  CFRelease(app);
+  AXUIElementRef main=nullptr;
+  if (windows&&CFGetTypeID(windows)==CFArrayGetTypeID()) {
+    const CFArrayRef list=(CFArrayRef)windows;
+    for (CFIndex i=0;i<CFArrayGetCount(list);i++) {
+      AXUIElementRef candidate=(AXUIElementRef)CFArrayGetValueAtIndex(list,i);
+      AXUIElementRef split=findElement(candidate,@"main_window_main_splitter_view",nil);
+      NSString *title=stringAttr(candidate,kAXTitleAttribute);
+      if (split) CFRelease(split);
+      if (!split && ![title isEqualToString:@"WeChat"] && ![title isEqualToString:@"微信"]) continue;
+      if (!main || split) {
+        if (main) CFRelease(main);
+        main=(AXUIElementRef)CFRetain(candidate);
+      }
+      if (split) break;
+    }
+  }
+  if (windows) CFRelease(windows);
+  return main;
+}
+
 napi_value RevealWeChatWindow(napi_env env,napi_callback_info) {
   @autoreleasepool {
     try {
@@ -545,40 +587,24 @@ napi_value RevealWeChatWindow(napi_env env,napi_callback_info) {
       }
       if (!wechat) throw std::runtime_error("请先登录电脑微信");
       const pid_t pid=wechat.processIdentifier;
-      AXUIElementRef app=AXUIElementCreateApplication(pid);
-      CFTypeRef windows=nullptr;
-      AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&windows);
-      CFRelease(app);
-      AXUIElementRef main=nullptr;
-      if (windows&&CFGetTypeID(windows)==CFArrayGetTypeID()) {
-        const CFArrayRef list=(CFArrayRef)windows;
-        for (CFIndex i=0;i<CFArrayGetCount(list);i++) {
-          AXUIElementRef candidate=(AXUIElementRef)CFArrayGetValueAtIndex(list,i);
-          AXUIElementRef split=findElement(candidate,@"main_window_main_splitter_view",nil);
-          NSString *title=stringAttr(candidate,kAXTitleAttribute);
-          if (split) CFRelease(split);
-          if (!split && ![title isEqualToString:@"WeChat"] && ![title isEqualToString:@"微信"]) continue;
-          if (!main || split) {
-            if (main) CFRelease(main);
-            main=(AXUIElementRef)CFRetain(candidate);
-          }
-          if (split) break;
-        }
-      }
-      if (windows) CFRelease(windows);
+      AXUIElementRef main=weChatMainWindow(pid);
       if (!main) throw std::runtime_error("微信主窗口尚未打开");
-      if (wechat.hidden) [wechat unhide];
-      CFTypeRef minimized=nullptr;
-      AXUIElementCopyAttributeValue(main,kAXMinimizedAttribute,&minimized);
-      const bool wasMinimized=minimized && CFGetTypeID(minimized)==CFBooleanGetTypeID() &&
-        CFBooleanGetValue((CFBooleanRef)minimized);
-      if (minimized) CFRelease(minimized);
-      const AXError result=wasMinimized
+      const bool hidden=wechat.hidden;
+      const bool minimized=boolAttr(main,kAXMinimizedAttribute);
+      const AXError result=minimized
         ? AXUIElementSetAttributeValue(main,kAXMinimizedAttribute,kCFBooleanFalse) : kAXErrorSuccess;
       CFRelease(main);
       if (result!=kAXErrorSuccess) throw std::runtime_error("微信主窗口暂时无法取消最小化");
-      napi_value out;
-      napi_create_int32(env,pid,&out);
+      if (wechat.hidden && ![wechat unhide])
+        throw std::runtime_error("微信主窗口暂时无法取消隐藏");
+      napi_value out, value;
+      napi_create_object(env,&out);
+      napi_create_int32(env,pid,&value);
+      napi_set_named_property(env,out,"pid",value);
+      napi_get_boolean(env,hidden,&value);
+      napi_set_named_property(env,out,"hidden",value);
+      napi_get_boolean(env,minimized,&value);
+      napi_set_named_property(env,out,"minimized",value);
       return out;
     } catch (const std::exception &error) {
       napi_throw_error(env,nullptr,error.what());
@@ -586,6 +612,26 @@ napi_value RevealWeChatWindow(napi_env env,napi_callback_info) {
     }
   }
 }
+void parkWeChatWindow(napi_env env,napi_value params) {
+  const double raw=number(env,params,"pid");
+  if(raw<=0||raw>INT32_MAX||std::floor(raw)!=raw)
+    throw std::runtime_error("无效的微信窗口进程");
+  const pid_t pid=(pid_t)raw;
+  NSRunningApplication *wechat=[NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+  if(!isWeChat(wechat)||weChatInUse())throw std::runtime_error("微信窗口已变化或正在使用");
+  bool hidden=false,minimized=false;
+  napi_get_value_bool(env,field(env,params,"hidden"),&hidden);
+  napi_get_value_bool(env,field(env,params,"minimized"),&minimized);
+  if(minimized){
+    AXUIElementRef main=weChatMainWindow(pid);
+    if(!main)throw std::runtime_error("微信主窗口已变化");
+    const AXError status=AXUIElementSetAttributeValue(main,kAXMinimizedAttribute,kCFBooleanTrue);
+    CFRelease(main);
+    if(status!=kAXErrorSuccess)throw std::runtime_error("微信主窗口暂时无法最小化");
+  }
+  if(hidden&&!wechat.hidden&&![wechat hide])throw std::runtime_error("暂时无法重新隐藏微信");
+}
+napi_value ParkWeChatWindow(napi_env env,napi_callback_info info){return run(env,info,parkWeChatWindow);}
 
 napi_value Init(napi_env env,napi_value exports){
   napi_property_descriptor methods[]={
@@ -597,6 +643,7 @@ napi_value Init(napi_env env,napi_value exports){
     {"frontmostPID",nullptr,FrontmostPID,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"restoreFocus",nullptr,RestoreFocus,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"revealWeChatWindow",nullptr,RevealWeChatWindow,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"parkWeChatWindow",nullptr,ParkWeChatWindow,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"capture",nullptr,Capture,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"screenTrusted",nullptr,ScreenTrusted,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"requestScreen",nullptr,RequestScreen,nullptr,nullptr,nullptr,napi_default,nullptr},

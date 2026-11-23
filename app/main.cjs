@@ -491,6 +491,7 @@ app
       wechatTools.learnFromSnapshot(contact, messages);
     agent.openChatsForSummary = () => wechatTools.openChatsForSummary();
     agent.recoverChatList = () => wechatTools.recoverChats();
+    agent.parkChatList = (window) => wechatTools.parkChats(window);
     const activityPoll = setInterval(() => {
       try {
         if (!agent.running) {

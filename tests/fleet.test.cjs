@@ -195,6 +195,49 @@ test("微信主列表不可见时等电脑空闲再恢复，恢复后继续巡�
   await f.agent.tick();
   assert.deepEqual(f.sendNames, ["甲"]);
 });
+test("隐藏的微信每五分钟巡检，无消息后还原，有消息则先处理", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 24, 9, 0) });
+  const f = fixture(t);
+  const request = f.native.request;
+  let hidden = false, reveals = 0, parks = 0;
+  const previousWindow = { pid: 100, hidden: true, minimized: false };
+  f.native.request = async (cmd, payload) => {
+    if (cmd === "discover" && hidden)
+      throw new Error("请展开微信的聊天列表，微信主窗口已隐藏");
+    return request(cmd, payload);
+  };
+  f.agent.recoverChatList = async () => {
+    reveals++;
+    hidden = false;
+    return previousWindow;
+  };
+  f.agent.parkChatList = (window) => {
+    assert.equal(window, previousWindow);
+    parks++;
+    hidden = true;
+  };
+  await f.agent.start();
+  hidden = true;
+  await f.agent.tick();
+  t.mock.timers.tick(299999);
+  await f.agent.tick();
+  assert.equal(reveals, 0);
+  t.mock.timers.tick(1);
+  await f.agent.tick();
+  assert.equal(reveals, 1);
+  assert.equal(parks, 1);
+  assert.equal(hidden, true);
+
+  f.rows[0].signature = "arrived-while-hidden";
+  t.mock.timers.tick(300000);
+  await f.agent.tick();
+  assert.equal(reveals, 2);
+  assert.equal(parks, 1);
+  assert.deepEqual(f.sendNames, ["甲"]);
+  await f.agent.tick();
+  assert.equal(parks, 2);
+  assert.equal(hidden, true);
+});
 test("会话暂时无法取得焦点时，其他会话继续回复", async (t) => {
   const f = fixture(t);
   let failedSelections = 0;

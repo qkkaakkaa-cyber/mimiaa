@@ -4,6 +4,7 @@ const { clean, parseSnapshot } = require("./domain.cjs");
 const { groupAllowed, isRecentWeChatTime } = require("./discovery.cjs");
 const pendingLifetime = 24 * 60 * 60 * 1000;
 const auditLifetime = 10 * 60 * 1000;
+const hiddenCheckInterval = 5 * 60 * 1000;
 const unknownDelivery = "这一段的发送结果待核实，请到微信确认";
 class FleetAgent extends Agent {
   constructor(options) {
@@ -16,6 +17,8 @@ class FleetAgent extends Agent {
     this.processed = 0;
     this.activityPaused = false;
     this.nextWindowRecovery = 0;
+    this.nextHiddenCheck = 0;
+    this.revealedWindow = null;
   }
   state() {
     return {
@@ -46,6 +49,7 @@ class FleetAgent extends Agent {
     if (this.activityPaused === active) return;
     this.activityPaused = active;
     if (active) {
+      this.revealedWindow = null;
       this.native.cancelSends?.();
       if (this.running) this.status = "检测到微信操作或未发送草稿，AI 已自动暂停";
     } else if (this.running) {
@@ -202,6 +206,7 @@ class FleetAgent extends Agent {
   stop(reason) {
     super.stop(reason);
     this.queue?.clear();
+    this.revealedWindow = null;
   }
   saveQueue() {
     const pending = Object.fromEntries([...this.queue].map(([id, row]) => [
@@ -256,6 +261,7 @@ class FleetAgent extends Agent {
       throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
     this.recentlyChecked.clear();
     this.nextWindowRecovery = 0;
+    this.nextHiddenCheck = 0;
     for (const [id, row] of Object.entries(this.store.data.reception.pending)) {
       if (Date.now() - row.queuedAt < pendingLifetime)
         this.queue.set(id, { id, ...row });
@@ -314,15 +320,21 @@ class FleetAgent extends Agent {
         d = await this.discover();
       } catch (error) {
         this.discovery = null;
-        this.status = "等待微信聊天列表，连接恢复后继续接待";
+        const hidden = /微信主窗口已(?:隐藏|最小化)/.test(error.message);
+        const now = Date.now();
+        this.status = hidden ? "微信暂时隐藏 · 每 5 分钟巡检"
+          : "等待微信聊天列表，连接恢复后继续接待";
+        if (hidden && !this.nextHiddenCheck) this.nextHiddenCheck = now + hiddenCheckInterval;
         if (!this.recoverChatList || !/请展开微信的聊天列表/.test(error.message) ||
-            Date.now() < this.nextWindowRecovery || this.activityPaused ||
+            now < (hidden ? this.nextHiddenCheck : this.nextWindowRecovery) || this.activityPaused ||
             this.idleTime() < 8 || this.native.control?.isWeChatInUse?.()) return;
-        this.nextWindowRecovery = Date.now() + 20000;
+        if (hidden) this.nextHiddenCheck = now + hiddenCheckInterval;
+        else this.nextWindowRecovery = now + 20000;
         this.phase("正在恢复微信主窗口和聊天列表");
         try {
-          await this.recoverChatList();
+          const window = await this.recoverChatList();
           if (ticket !== this.epoch) return;
+          if (window) this.revealedWindow = window;
           d = await this.discover();
         } catch {
           if (ticket === this.epoch)
@@ -332,6 +344,7 @@ class FleetAgent extends Agent {
       }
       if (ticket !== this.epoch) return;
       this.nextWindowRecovery = 0;
+      if (!this.revealedWindow) this.nextHiddenCheck = 0;
       if (this.needsBaseline) this.initializeQueue(d);
       const visible = new Map(d.sessions.map((row) => [row.id, row]));
       const now = Date.now();
@@ -379,7 +392,21 @@ class FleetAgent extends Agent {
         }
       }
       if (this.activityPaused || this.native.control?.isWeChatInUse?.()) {
+        this.revealedWindow = null;
         this.status = "检测到你正在用微信或有草稿，新消息先排队";
+        return;
+      }
+      if (this.revealedWindow && !this.queue.size && this.idleTime() >= 8) {
+        const window = this.revealedWindow;
+        this.revealedWindow = null;
+        this.nextHiddenCheck = Date.now() + hiddenCheckInterval;
+        try {
+          this.parkChatList(window);
+          this.discovery = null;
+          this.status = "巡检完成，已恢复微信隐藏状态 · 5 分钟后再检查";
+        } catch {
+          this.status = "巡检完成，微信窗口暂时保留";
+        }
         return;
       }
       const ready = [...this.queue.values()].filter((row) =>

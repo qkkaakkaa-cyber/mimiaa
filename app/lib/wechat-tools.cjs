@@ -331,9 +331,9 @@ class WeChatTools {
     if (!allowed()) return;
     const previousPID = this.control.frontmostPID();
     this.native.navigating = true;
-    let pid;
+    let restored;
     try {
-      pid = this.control.revealWeChatWindow();
+      restored = this.control.revealWeChatWindow();
       for (const delay of [300, 450, 750]) {
         await this.native.sleep(delay);
         if (!allowed()) return;
@@ -343,24 +343,32 @@ class WeChatTools {
         } catch {
           continue;
         }
-        if (main.pid !== pid) throw new Error("微信主窗口已变化");
+        if (main.pid !== restored.pid) throw new Error("微信主窗口已变化");
         const list = main.items.find((item) => item.id === "session_list");
         const folded = [list?.label, list?.title, list?.value].some((value) => value === "折叠的聊天");
         if (!list || folded) {
           await this.openChats({ allowed, force: folded });
           await this.native.sleep(350);
         }
-        return;
+        break;
       }
-      throw new Error("微信主窗口暂未显示");
+    } catch (error) {
+      if (!restored?.hidden && !restored?.minimized) throw error;
     } finally {
       try {
-        if (pid && previousPID && pid !== previousPID && allowed())
+        if (restored && previousPID && restored.pid !== previousPID && allowed())
           this.control.restoreFocus({ pid: previousPID });
+      } catch {
+        // The previous app may have closed while WeChat opened.
       } finally {
         this.native.navigating = false;
       }
     }
+    if ((restored?.hidden || restored?.minimized) && ticket === this.native.epoch &&
+        !this.control.isWeChatInUse?.()) return restored;
+  }
+  parkChats(window) {
+    this.control.parkWeChatWindow(window);
   }
   async openChatsForSummary() {
     const before = this.control.frontmostPID();
