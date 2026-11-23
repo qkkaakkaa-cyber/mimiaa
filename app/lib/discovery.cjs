@@ -5,6 +5,10 @@ const normalize = (s) =>
     .trim();
 const textOf = (item) => normalize(item?.value || item?.label || item?.title);
 const sig = (text) => crypto.createHash("sha256").update(text).digest("hex");
+const timeOfDay = /^(?:今天\s*)?(?:[01]?\d|2[0-3]):[0-5]\d$/u;
+const sessionDate = /^(?:(?:昨天|星期.|周.)(?:\s+\d{1,2}:\d{2})?|\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}月\d{1,2}日)$/u;
+const unreadBadge = /^\[(\d+)\+?\s*条\]\s*/u;
+const isNudge = (text) => /^(?:[「“].+[」”]|你)拍了拍/u.test(text);
 function discoverFromAX(raw) {
   if (!raw || !Array.isArray(raw.items) || !raw.windowId)
     throw new Error("无法读取微信会话列表");
@@ -14,6 +18,11 @@ function discoverFromAX(raw) {
     chat = find("chat_message_list"),
     input = find("chat_input_field"),
     title = find("current_chat_name_label") || find("big_title_line_h_view");
+  if (
+    list &&
+    [list.label, list.title, list.value].some((v) => normalize(v) === "折叠的聊天")
+  )
+    throw new Error("请展开微信的聊天列表，微响不接待折叠会话");
   const relative = (frame) => ({
     x: (frame.x - raw.frame.x) / raw.frame.w,
     y: (frame.y - raw.frame.y) / raw.frame.h,
@@ -33,23 +42,25 @@ function discoverFromAX(raw) {
       const name = normalize(item.id.slice("session_item_".length)),
         label = textOf(item);
       const lines = label.split(/\n+/).map(normalize).filter(Boolean);
-      const preview = lines
-        .filter(
-          (l) =>
-            l !== name &&
-            l !== "已置顶" &&
-            !/^(?:\d{1,2}:\d{2}|昨天|星期.|周.|\d{4}\/\d{2}\/\d{2}|\d{1,2}月\d{1,2}日)$/.test(
-              l,
-            ),
+      const content = lines.filter((line) => line !== name && line !== "已置顶");
+      const unreadCount = Number(content[0]?.match(unreadBadge)?.[1] || 0);
+      const time = content.findLast((line) => timeOfDay.test(line) || sessionDate.test(line)) || "";
+      const preview = content
+        .map((line, index) => index === 0 ? line.replace(unreadBadge, "") : line)
+        .filter((line) =>
+          line && line !== "消息免打扰" && !timeOfDay.test(line) && !sessionDate.test(line),
         )
         .join("\n");
       return {
         id: item.id,
         name,
         preview,
-        signature: sig(preview),
-        unread: /\d+条(?:未读|新消息)|未读消息|有人@我/.test(label),
-        time: lines.at(-1) || "",
+        signature: sig(JSON.stringify([preview, time])),
+        unread: unreadCount > 0 || /\d+条(?:未读|新消息)|未读消息|有人@我/.test(label),
+        unreadCount,
+        today: timeOfDay.test(time),
+        systemOnly: isNudge(preview),
+        time,
         point: {
           x: relative(item.frame).x + relative(item.frame).w / 2,
           y: relative(item.frame).y + relative(item.frame).h / 2,
@@ -65,6 +76,7 @@ function discoverFromAX(raw) {
       ![
         "公众号",
         "服务号",
+        "折叠的聊天",
         "订阅号消息",
         "服务通知",
         "微信团队",
@@ -74,9 +86,13 @@ function discoverFromAX(raw) {
   );
   let active = null;
   if (chat && input && title) {
-    const rawName = textOf(title),
-      name = rawName.replace(/\s*[（(]\d+[)）]\s*$/, "").trim(),
-      session = unique.find((s) => s.name === name);
+    const rawName = textOf(title);
+    let name = rawName.replace(/\s*[（(]\d+[)）]\s*$/, "").trim();
+    if (!find("current_chat_name_label") && !unique.some((row) => row.name === name)) {
+      const contacts = unique.filter((row) => name.startsWith(`${row.name} @`));
+      if (contacts.length === 1) name = contacts[0].name;
+    }
+    const session = unique.find((s) => s.name === name);
     const fullHeader = textOf(find("big_title_line_h_view"));
     const memberCount = textOf(find("current_chat_count_label"));
     const voip = items.find((i) => i.id === "voip_button"),
@@ -86,6 +102,7 @@ function discoverFromAX(raw) {
     const kind =
       /^\(?\d+\)?$/.test(memberCount) ||
       /[（(]\d+[)）]\s*$/.test(fullHeader || rawName) ||
+      /聊天群$|(?:^|\s)群\d*$/u.test(name) ||
       /群.*(?:通话|语音)|group/i.test(callText)
         ? "group"
         : /^语音通话$|^voice call$/i.test(callText)
@@ -151,7 +168,8 @@ function discoverFromAX(raw) {
               active.calibration.messages.y +
                 active.calibration.messages.h +
                 0.02 &&
-            !/WeChat转账|微信转账|微信红包|^图片$|^视频(?:号|\s)|^\[文件\]/i.test(
+            !isNudge(line.text) &&
+            !/WeChat转账|微信转账|微信红包/i.test(
               line.text,
             ),
         )
@@ -164,6 +182,14 @@ function discoverFromAX(raw) {
       line.mediaType = "voice";
       line.transcribed = !!voice[1].trim();
       line.text = voice[1].trim() || "【语音消息，尚未转文字】";
+    } else if (/^图片$/u.test(line.text)) {
+      line.mediaType = "image";
+    } else if (/^视频(?:号.*|\s+\d{1,2}:\d{2})?$/u.test(line.text)) {
+      line.mediaType = "video";
+    } else if (/^(?:动画表情|表情)$/u.test(line.text)) {
+      line.mediaType = "sticker";
+    } else if (/^\[文件\]/u.test(line.text)) {
+      line.mediaType = "file";
     }
   }
   return {

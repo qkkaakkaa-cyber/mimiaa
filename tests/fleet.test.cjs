@@ -96,6 +96,25 @@ test("启动自动发现列表，不补发旧消息；私聊之间自动轮询",
   assert.ok(f.store.memoryFor("session_item_甲").messages.length);
   assert.equal(f.store.memoryFor("session_item_乙").summary, "你好");
 });
+test("开启时补今天仍未读的会话，略过之前日期和拍一拍", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.rows[0], { unread: true, today: true });
+  Object.assign(f.rows[1], { unread: true, today: false, time: "昨天 21:00" });
+  f.rows.push({ id: "session_item_丙", name: "丙", signature: "nudge", unread: true, today: true, systemOnly: true });
+  assert.equal((await f.agent.start()).queueSize, 1);
+  await f.agent.tick();
+  f.rows[0].unread = false;
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("排队期间用户已读，自动接待不再补发", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.rows[0], { unread: true, today: true });
+  await f.agent.start();
+  f.rows[0].unread = false;
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, []);
+});
 test("需要人工的聊天进入待办，其他聊天继续处理", async (t) => {
   const f = fixture(t);
   f.agent.intelligence = () => ({
@@ -180,6 +199,7 @@ test("发现结构自动提取原生微信会话与输入位置，过滤系统�
       item("session_list", "", 60, 80, 250, 700),
       item("session_item_甲", "甲\n你好\n12:00", 60, 90, 250, 70),
       item("session_item_公众号", "公众号\n新闻\n12:00", 60, 160, 250, 70),
+      item("session_item_折叠的聊天", "折叠的聊天\n[85条] 群消息", 60, 230, 250, 70),
       item("current_chat_name_label", "甲", 340, 20, 120, 30),
       item("chat_message_list", "", 310, 90, 680, 480),
       item("chat_input_field", "", 320, 620, 650, 130),
@@ -190,6 +210,35 @@ test("发现结构自动提取原生微信会话与输入位置，过滤系统�
   assert.equal(d.active.expectedTitle, "甲");
   assert.equal(d.active.kind, "private");
   assert.equal(d.active.windowId, 8);
+});
+test("新款微信的方括号计数、企业微信标题和最新图片可以同时识别", () => {
+  const item = (id, value, x, y, w, h) => ({ id, value, frame: { x, y, w, h } });
+  const raw = {
+    windowId: 8,
+    pid: 1,
+    frame: { x: 0, y: 0, w: 1000, h: 800 },
+    items: [
+      item("session_list", "会话", 60, 80, 250, 700),
+      item("session_item_周琴", "周琴\n[4条] \n[图片]\n08:23\n消息免打扰", 60, 90, 250, 70),
+      item("big_title_line_h_view", "周琴 @悦瑞网络", 340, 20, 160, 30),
+      item("chat_message_list", "", 310, 90, 680, 480),
+      item("chat_input_field", "", 320, 620, 650, 130),
+      item("voip_button", "语音通话", 900, 20, 30, 30),
+      item("chat_bubble_item_view", "图片", 350, 350, 120, 100),
+    ],
+  };
+  const d = discoverFromAX(raw);
+  assert.equal(d.sessions[0].unreadCount, 4);
+  assert.equal(d.sessions[0].today, true);
+  assert.equal(d.sessions[0].preview, "[图片]");
+  assert.equal(d.sessions[0].time, "08:23");
+  assert.equal(d.active.sessionId, "session_item_周琴");
+  assert.equal(d.active.kind, "private");
+  assert.equal(d.messageLines.at(-1).mediaType, "image");
+  raw.items[1].value = "周琴\n[图片]\n08:23\n消息免打扰";
+  assert.equal(discoverFromAX(raw).sessions[0].signature, d.sessions[0].signature);
+  raw.items[0].value = "折叠的聊天";
+  assert.throws(() => discoverFromAX(raw), /不接待折叠会话/);
 });
 test("微信把成员数拆成独立控件时仍识别为群聊", () => {
   const item = (id, value, x, y, w, h) => ({

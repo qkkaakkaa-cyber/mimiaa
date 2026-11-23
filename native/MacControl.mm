@@ -238,9 +238,16 @@ AXUIElementRef verifiedChat(Target &target,NSString *expected){
  CFTypeRef windows=nullptr;AXUIElementCopyAttributeValue(target.app,kAXWindowsAttribute,&windows);AXUIElementRef chosen=nullptr;
  if(windows&&CFGetTypeID(windows)==CFArrayGetTypeID())for(CFIndex i=0;i<CFArrayGetCount((CFArrayRef)windows);i++){auto win=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)windows,i);if(close(bounds(win),target.frame)){chosen=(AXUIElementRef)CFRetain(win);break;}}
  if(windows)CFRelease(windows);if(!chosen)throw std::runtime_error("微信窗口已变化");
- AXUIElementRef title=findElement(chosen,@"current_chat_name_label",nil);NSString *name=title?stringAttr(title,kAXValueAttribute):@"";
+ AXUIElementRef title=findElement(chosen,@"current_chat_name_label",nil);
+ const bool usesHeader=!title;
+ if(usesHeader)title=findElement(chosen,@"big_title_line_h_view",nil);
+ NSString *name=title?stringAttr(title,kAXValueAttribute):@"";
  if(title)CFRelease(title);name=[name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
  NSRegularExpression *count=[NSRegularExpression regularExpressionWithPattern:@"\\s*[（(][0-9]+[)）]\\s*$" options:0 error:nil];name=[count stringByReplacingMatchesInString:name options:0 range:NSMakeRange(0,name.length) withTemplate:@""];
+ if(usesHeader&&[name hasPrefix:[expected stringByAppendingString:@" @"]]){
+   AXUIElementRef row=findElement(chosen,[@"session_item_" stringByAppendingString:expected],nil);
+   if(row){name=expected;CFRelease(row);}
+ }
  if(![name isEqual:expected]){CFRelease(chosen);throw std::runtime_error("聊天对象已变化，停止后台输入");}return chosen;
 }
 void writeMoment(napi_env env,napi_value params){

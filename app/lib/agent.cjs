@@ -28,6 +28,12 @@ class Agent {
   memoryKey() {
     return this.context?.sessionId || this.settings().expectedTitle;
   }
+  deliveryKey(snapshot) {
+    return crypto
+      .createHash("sha256")
+      .update(this.memoryKey() + "|" + snapshot.fingerprint)
+      .digest("hex");
+  }
   state() {
     return {
       running: this.running,
@@ -321,16 +327,18 @@ class Agent {
       throw new Error("自动发送已取消，请检查接待状态");
     const checkCapture = await this.capture();
     const parsed = parseSnapshot(checkCapture, s);
-    if (!parsed.titleVerified || parsed.fingerprint !== this.draft.fingerprint)
+    if (!parsed.titleVerified)
       throw new Error("聊天内容已变化，请重新读取后再回复");
+    if (parsed.fingerprint !== this.draft.fingerprint) {
+      const error = new Error("聊天内容已变化，请重新读取后再回复");
+      error.canRetry = automatic;
+      throw error;
+    }
     const expectedOCR = checkCapture.lines
       .filter((l) => within(l.box, s.calibration.messages))
       .sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x)
       .map((l) => l.text);
-    const ledgerKey = crypto
-      .createHash("sha256")
-      .update(this.memoryKey() + "|" + parsed.fingerprint)
-      .digest("hex");
+    const ledgerKey = this.deliveryKey(parsed);
     if (this.store.attempted(ledgerKey))
       throw new Error("这条消息已有发送记录，为避免重复，请到微信中确认");
     if (ticket !== this.epoch) throw new Error("操作已暂停，本次发送已取消");

@@ -243,6 +243,8 @@ function parseSnapshot(capture, settings) {
     const last = messages.at(-1);
     if (
       last &&
+      !last.mediaType &&
+      !line.mediaType &&
       last.role === role &&
       line.box.y - last.bottom < 0.022 &&
       Math.abs(line.box.x - last.x) < 0.05

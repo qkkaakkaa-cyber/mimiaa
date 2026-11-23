@@ -37,6 +37,8 @@ function limitCasualQuestions(text) {
 }
 const REPORT_INSTRUCTION = `同时输出 conversationReport：{"core":"此次对话的核心，一句话","intent":"对方明确想要什么，未说清则填未明确","nextSteps":["明确的下一步"],"ownerTodo":["需要老板本人处理的事项"]}。这是给老板看的核心提炼，不是发给对方的话。只依据本段对话，区分对方诉求、建议与实际承诺；没有待办就空数组，纯闲聊明确写闲聊主题，不凭空安排工作，不保存密码或个人敏感信息。对方明确告别或确认本次事项已结束时标记 conversationFinished=true；否则 false。即使无需回复，也要提炼已有核心。`;
 
+const MEDIA_INSTRUCTION = "聊天中的图片、视频、表情、文件提示只表示收到该类型的消息，你看不到内容。可以结合前文回应，或简短确认收到再问重点；不能描述没看见的内容、声称已核实附件或凭空给出承诺。对方只分享表情时自然简短接话即可。";
+
 function terms(text) {
   const result = new Set(
     String(text)
@@ -286,7 +288,7 @@ reply 用于有资料支持的业务解答，必须引用实际提供的 sourceI
             "\n" +
             prompt +
             "\n" +
-            REPORT_INSTRUCTION,
+            MEDIA_INSTRUCTION + "\n" + REPORT_INSTRUCTION,
         },
         ...history
           .filter((m) => ["in", "out"].includes(m.role))
@@ -349,7 +351,7 @@ reply 用于有资料支持的业务解答，必须引用实际提供的 sourceI
             "\n" +
             prompt +
             "\n" +
-            REPORT_INSTRUCTION,
+            MEDIA_INSTRUCTION + "\n" + REPORT_INSTRUCTION,
         },
         ...history
           .filter((m) => ["in", "out"].includes(m.role))

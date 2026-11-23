@@ -190,25 +190,29 @@ class FleetAgent extends Agent {
     if (!permissions.screen)
       throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
     const d = await this.discover();
-    this.seen = new Map(d.sessions.map((s) => [s.id, s.signature]));
+    this.seen = new Map(d.sessions.map((row) => [row.id, row]));
     this.queue.clear();
     for (const row of d.sessions) {
+      if (this.excluded(row) || row.systemOnly) continue;
       const pending = this.store.data.modelRetries[row.id];
       if (
         pending &&
-        Date.now() - pending.failedAt < 30 * 60 * 1000 &&
-        !this.excluded(row)
+        Date.now() - pending.failedAt < 30 * 60 * 1000
       )
         this.queue.set(row.id, {
           ...row,
           retryFingerprint: pending.fingerprint,
         });
+      else if (row.today && row.unread)
+        this.queue.set(row.id, { ...row, unreadBacklog: true });
     }
     this.startedAt = Date.now();
     this.context = null;
     this.draft = null;
     this.running = true;
-    this.status = "已自动连接微信，等待私聊和群聊的新消息";
+    this.status = this.queue.size
+      ? `已找到 ${this.queue.size} 段今日未读或待重试会话，正在核对`
+      : "已自动连接微信，等待私聊和群聊的新消息";
     this.store.log("start", "开启微信多会话接待");
     this.emit();
     this.schedule();
@@ -251,27 +255,37 @@ class FleetAgent extends Agent {
         return;
       }
       if (ticket !== this.epoch) return;
+      const clock = new Date().toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
       for (const row of d.sessions) {
         const previous = this.seen.get(row.id);
-        this.seen.set(row.id, row.signature);
-        // Ignore old newly exposed rows after manual scrolling. New conversations
-        // must carry unread evidence or a current-minute timestamp.
-        const clock = new Date().toLocaleTimeString("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        if (
-          !this.excluded(row) &&
-          ((previous !== undefined && previous !== row.signature) ||
-            (previous === undefined && (row.unread || row.time === clock)))
-        )
+        this.seen.set(row.id, row);
+        if (this.excluded(row) || row.systemOnly || row.today === false) continue;
+        const unreadArrived = row.unread &&
+          (!previous?.unread || row.unreadCount > previous.unreadCount);
+        if (unreadArrived) {
+          this.queue.set(row.id, { ...row, unreadBacklog: true });
+        } else if (
+          (previous && previous.signature !== row.signature) ||
+          (!previous && row.time === clock)
+        ) {
           this.queue.set(row.id, row);
+        }
       }
       const row = this.queue.values().next().value;
       if (!row) {
         this.status = "接待中 · 等待新的私聊和群聊消息";
         if (this.idleTime() >= 15) this.scanIdleMoments?.();
         return;
+      }
+      if (row.unreadBacklog) {
+        const current = d.sessions.find((session) => session.id === row.id);
+        if (!current || !current.unread || current.systemOnly || current.today === false) {
+          this.queue.delete(row.id);
+          return;
+        }
       }
       if (
         this.idleTime() < 5 &&
@@ -340,6 +354,20 @@ class FleetAgent extends Agent {
           context.kind === "unknown"
             ? "无法确认私聊或群聊类型，留给人工"
             : "当前会话不满足接待范围，已略过";
+        return;
+      }
+      if (snapshot.last?.role === "in" && this.store.attempted(this.deliveryKey(snapshot))) {
+        this.status = "这条消息已有发送记录，继续接待其他会话";
+        return;
+      }
+      const mediaPreview = {
+        image: /\[图片\]/u,
+        video: /\[视频(?:号)?\]/u,
+        sticker: /\[(?:动画)?表情\]/u,
+        file: /\[文件\]/u,
+      }[snapshot.last?.mediaType];
+      if (snapshot.last?.role === "in" && mediaPreview && !mediaPreview.test(row.preview || "")) {
+        this.status = "媒体消息与会话预览未对上，留给人工核对";
         return;
       }
       if (snapshot.last?.role === "in")
@@ -534,10 +562,7 @@ class FleetAgent extends Agent {
         snapshot.messages.some((m) => m.role === "out" && m.text === greeting)
       )
         throw new Error("已在会话中找到这条回复，不重复发送");
-      const key = crypto
-        .createHash("sha256")
-        .update(this.memoryKey() + "|" + snapshot.fingerprint)
-        .digest("hex");
+      const key = this.deliveryKey(snapshot);
       const record = this.store.data.ledger.find((r) => r.key === key);
       if (record?.status === "unconfirmed") this.store.record(key, "cancelled");
     }
