@@ -20,6 +20,7 @@ class Store {
       dailyInsights: {},
       conversationReports: [],
       modelRetries: {},
+      reception: { enabled: false, pending: {} },
       wechatRecords: { profiles: [], drafts: [], moments: [] },
       events: [],
       ledger: [],
@@ -55,6 +56,7 @@ class Store {
       dailyInsights,
       conversationReports,
       modelRetries,
+      reception,
       wechatRecords,
       ...data
     } = this.data;
@@ -288,6 +290,11 @@ class Store {
     );
     if (entry) entries.unshift([sessionId, entry]);
     this.data.modelRetries = Object.fromEntries(entries.slice(0, 100));
+    this.flush();
+  }
+  saveReception(value) {
+    if (JSON.stringify(this.data.reception) === JSON.stringify(value)) return;
+    this.data.reception = value;
     this.flush();
   }
   recordProfile(profile) {

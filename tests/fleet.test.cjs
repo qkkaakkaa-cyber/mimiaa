@@ -388,6 +388,7 @@ test("微信操作时暂停，微信仍在前台但操作停止后继续", async
   await f.agent.tick();
   assert.deepEqual(f.sendNames, []);
   assert.equal(f.agent.running, true);
+  assert.equal(f.store.data.reception.pending[f.rows[0].id].signature, "new-paused");
   active = false;
   f.agent.setActivityPaused(false);
   await f.agent.tick();
@@ -456,9 +457,101 @@ test("AI 凭证暂时不可用，恢复接待后核对并处理同一条消息",
   assert.equal(f.agent.running, true);
   assert.match(f.agent.status, /稍后自动重试/);
   assert.deepEqual(f.sendNames, []);
+  const reopened = new Store(f.store.dir);
+  const pending = reopened.data.reception.pending[f.rows[0].id];
+  assert.ok(pending.retryFingerprint);
+  assert.ok(pending.retryAfter > Date.now());
+  assert.equal(Object.hasOwn(pending, "preview"), false);
+  pending.retryAfter = 0;
+  reopened.flush();
+  f.agent.store = reopened;
   await f.agent.start();
   f.agent.intelligence = workingModel;
   await f.agent.tick();
   assert.deepEqual(f.sendNames, ["甲"]);
-  assert.deepEqual(f.store.data.modelRetries, {});
+  assert.deepEqual(reopened.data.reception.pending, {});
+});
+
+test("切换后读取失败，保留已被打开的未读会话且继续处理其他会话", async (t) => {
+  const f = fixture(t);
+  Object.assign(f.rows[0], { unread: true, today: true, preview: "你好" });
+  const request = f.native.request;
+  let fail = true;
+  f.native.request = async (cmd, payload) => {
+    const result = await request(cmd, payload);
+    if (cmd === "select-session" && payload.id === f.rows[0].id) f.rows[0].unread = false;
+    if (cmd === "capture" && f.agent.context.expectedTitle === "甲" && fail)
+      throw new Error("微信暂未显示聊天内容");
+    return result;
+  };
+  await f.agent.start();
+  await f.agent.tick();
+  assert.equal(f.agent.running, true);
+  assert.equal(f.store.data.reception.pending[f.rows[0].id].opened, true);
+  f.rows[1].signature = "new";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["乙"]);
+  fail = false;
+  f.agent.queue.get(f.rows[0].id).retryAfter = 0;
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["乙", "甲"]);
+});
+
+test("限流超过三次仍保留待回复，限流期间继续发现新消息", async (t) => {
+  const f = fixture(t);
+  const workingModel = f.agent.intelligence;
+  await f.agent.start();
+  let calls = 0;
+  f.rows[0].signature = "rate-limited";
+  f.agent.intelligence = () => ({ decide: async () => {
+    calls++;
+    throw Object.assign(new Error("AI 接口限流"), { rateLimited: true, retryDelay: 45000 });
+  } });
+  await f.agent.tick();
+  f.rows[1].signature = "arrived-during-rate-limit";
+  await f.agent.tick();
+  assert.equal(calls, 1);
+  assert.equal(Object.keys(f.store.data.reception.pending).length, 2);
+  for (let retry = 0; retry < 3; retry++) {
+    f.store.data.reception.modelBlockedUntil = 0;
+    f.agent.queue.get(f.rows[0].id).retryAfter = 0;
+    await f.agent.tick();
+  }
+  assert.equal(calls, 4);
+  assert.equal(f.agent.running, true);
+  assert.deepEqual(f.sendNames, []);
+  f.agent.intelligence = workingModel;
+  f.store.data.reception.modelBlockedUntil = 0;
+  f.agent.queue.get(f.rows[0].id).retryAfter = 0;
+  await f.agent.tick();
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲", "乙"]);
+});
+
+test("单段发送结果不明时保留人工待办，自动接待仍处理下一段", async (t) => {
+  const f = fixture(t);
+  const sendNext = f.agent.deliver;
+  const request = f.native.request;
+  let uncertainAttempts = 0;
+  f.native.request = async (cmd, payload) => {
+    if (cmd === "send") {
+      uncertainAttempts++;
+      throw new Error("微信发送确认中断");
+    }
+    return request(cmd, payload);
+  };
+  f.agent.deliver = async (...args) => f.agent.context.expectedTitle === "甲"
+    ? FleetAgent.prototype.deliver.call(f.agent, ...args) : sendNext(...args);
+  await f.agent.start();
+  f.rows[0].signature = "uncertain";
+  f.rows[1].signature = "second";
+  await f.agent.tick();
+  assert.equal(f.agent.running, true);
+  assert.equal(f.agent.tasks[0].context.expectedTitle, "甲");
+  assert.equal(f.store.data.ledger[0].status, "unconfirmed");
+  await f.agent.tick();
+  f.rows[0].signature = "uncertain-reappeared";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["乙"]);
+  assert.equal(uncertainAttempts, 1);
 });

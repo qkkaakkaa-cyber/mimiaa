@@ -2,6 +2,8 @@ const crypto = require("node:crypto");
 const { Agent } = require("./agent.cjs");
 const { clean, parseSnapshot } = require("./domain.cjs");
 const { groupAllowed, isRecentWeChatTime } = require("./discovery.cjs");
+const pendingLifetime = 24 * 60 * 60 * 1000;
+const unknownDelivery = "这一段的发送结果待核实，请到微信确认";
 class FleetAgent extends Agent {
   constructor(options) {
     super(options);
@@ -170,6 +172,26 @@ class FleetAgent extends Agent {
     }
     return result;
   }
+  cancelledDelivery(error, automatic) {
+    if (!automatic) super.cancelledDelivery(error);
+  }
+  unconfirmedDelivery(automatic, snapshot) {
+    if (!automatic) {
+      super.unconfirmedDelivery();
+      return;
+    }
+    if (!this.running) return;
+    this.status = unknownDelivery;
+    const context = this.context;
+    this.tasks = [{
+      id: crypto.randomUUID(),
+      context,
+      snapshot,
+      draft: null,
+      reason: unknownDelivery,
+      time: new Date().toISOString(),
+    }, ...this.tasks.filter((task) => task.context.sessionId !== context.sessionId)].slice(0, 30);
+  }
   async discover() {
     this.discovery = await this.native.request("discover");
     this.emit();
@@ -179,40 +201,79 @@ class FleetAgent extends Agent {
     super.stop(reason);
     this.queue?.clear();
   }
+  saveQueue() {
+    const pending = Object.fromEntries([...this.queue].map(([id, row]) => [
+      id, {
+        signature: row.signature,
+        queuedAt: row.queuedAt,
+        unreadBacklog: row.unreadBacklog,
+        recentAudit: row.recentAudit,
+        retryFingerprint: row.retryFingerprint,
+        retryAfter: row.retryAfter,
+        failures: row.failures,
+        opened: row.opened,
+      },
+    ]));
+    this.store.saveReception({ ...this.store.data.reception, pending });
+  }
+  enqueue(row, extra = {}) {
+    this.queue.set(row.id, { ...row, queuedAt: Date.now(), ...extra });
+  }
+  retry(row, status, error, minimum = 12000) {
+    const failures = (row.failures || 0) + 1;
+    const delay = Math.max(minimum, Math.min(120000, 12000 * 2 ** Math.min(4, failures - 1)));
+    this.queue.set(row.id, { ...row, failures, retryAfter: Date.now() + delay });
+    this.status = status;
+    if (error && (failures === 1 || failures % 5 === 0))
+      this.store.log("warning", error.message);
+  }
+  initializeQueue(d) {
+    this.seen = new Map(d.sessions.map((row) => [row.id, row]));
+    this.needsBaseline = false;
+    for (const row of d.sessions) {
+      if (this.excluded(row) || row.systemOnly || this.queue.has(row.id)) continue;
+      const pending = this.store.data.modelRetries[row.id];
+      if (pending && Date.now() - pending.failedAt < 30 * 60 * 1000)
+        this.enqueue(row, { retryFingerprint: pending.fingerprint, opened: true });
+      else if (row.today && row.unread)
+        this.enqueue(row, { unreadBacklog: true });
+    }
+  }
   excluded(row) {
     return this.store.data.settings.reception.excluded.includes(row.name);
   }
   async start() {
     if (this.busy) throw new Error("上一项操作还在进行");
     this.stop("正在自动查找微信…");
+    const ticket = this.epoch;
     const permissions = await this.native.request("permissions");
+    if (ticket !== this.epoch) return this.state();
     if (!permissions.accessibility)
       throw new Error("请先为微响开启辅助功能，才能自动识别会话");
     if (!permissions.screen)
       throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
-    const d = await this.discover();
-    this.seen = new Map(d.sessions.map((row) => [row.id, row]));
     this.recentlyChecked.clear();
-    this.queue.clear();
-    for (const row of d.sessions) {
-      if (this.excluded(row) || row.systemOnly) continue;
-      const pending = this.store.data.modelRetries[row.id];
-      if (
-        pending &&
-        Date.now() - pending.failedAt < 30 * 60 * 1000
-      )
-        this.queue.set(row.id, {
-          ...row,
-          retryFingerprint: pending.fingerprint,
-        });
-      else if (row.today && row.unread)
-        this.queue.set(row.id, { ...row, unreadBacklog: true });
+    for (const [id, row] of Object.entries(this.store.data.reception.pending)) {
+      if (Date.now() - row.queuedAt < pendingLifetime)
+        this.queue.set(id, { id, ...row });
     }
+    this.needsBaseline = true;
+    try {
+      const d = await this.discover();
+      if (ticket !== this.epoch) return this.state();
+      this.initializeQueue(d);
+    } catch {
+      if (ticket !== this.epoch) return this.state();
+      this.discovery = null;
+    }
+    this.saveQueue();
     this.startedAt = Date.now();
     this.context = null;
     this.draft = null;
     this.running = true;
-    this.status = this.queue.size
+    this.status = this.needsBaseline
+      ? "等待微信聊天列表，连接恢复后继续接待"
+      : this.queue.size
       ? `已找到 ${this.queue.size} 段今日未读或待重试会话，正在核对`
       : "已自动连接微信，等待私聊和群聊的新消息";
     this.store.log("start", "开启微信多会话接待");
@@ -243,26 +304,31 @@ class FleetAgent extends Agent {
     }
     this.busy = true;
     const ticket = this.epoch;
+    let activeJob;
     try {
-      if (this.activityPaused || this.native.control?.isWeChatInUse?.()) {
-        this.status = "检测到微信操作或未发送草稿，AI 已自动暂停";
-        return;
-      }
       let d;
       try {
         d = await this.discover();
-      } catch (error) {
-        if (!/请展开微信的聊天列表/.test(error.message)) throw error;
-        this.status = "微信当前在其他页面，返回聊天列表后继续接待";
+      } catch {
+        this.discovery = null;
+        this.status = "等待微信聊天列表，连接恢复后继续接待";
         return;
       }
       if (ticket !== this.epoch) return;
+      if (this.needsBaseline) this.initializeQueue(d);
+      const visible = new Map(d.sessions.map((row) => [row.id, row]));
+      for (const [id, job] of this.queue) {
+        const current = visible.get(id);
+        if (Date.now() - job.queuedAt >= pendingLifetime ||
+            (current && (current.signature !== job.signature || this.excluded(current))))
+          this.queue.delete(id);
+      }
       const activeRow = d.sessions.find((row) => row.id === d.active?.sessionId);
       if (activeRow && typeof d.composerText === "string" && !d.composerText.trim() && !this.excluded(activeRow)) {
         const draftTask = this.tasks.find((task) => task.waitingForDraft && task.context.sessionId === activeRow.id);
         if (draftTask) {
           this.tasks = this.tasks.filter((task) => task.id !== draftTask.id);
-          this.queue.set(activeRow.id, { ...activeRow, retryFingerprint: draftTask.snapshot.fingerprint });
+          this.enqueue(activeRow, { retryFingerprint: draftTask.snapshot.fingerprint, opened: true });
         }
       }
       const clock = new Date().toLocaleTimeString("en-GB", {
@@ -273,41 +339,51 @@ class FleetAgent extends Agent {
         const previous = this.seen.get(row.id);
         this.seen.set(row.id, row);
         if (this.excluded(row) || row.systemOnly || row.today === false) continue;
+        if (this.queue.get(row.id)?.signature === row.signature) continue;
         const unreadArrived = row.unread &&
           (!previous?.unread || row.unreadCount > previous.unreadCount);
         if (unreadArrived) {
-          this.queue.set(row.id, { ...row, unreadBacklog: true });
+          this.enqueue(row, { unreadBacklog: true });
         } else if (
           (previous && previous.signature !== row.signature) ||
           (!previous && row.time === clock)
         ) {
-          this.queue.set(row.id, row);
+          this.enqueue(row);
         }
       }
       for (const row of d.sessions) {
         if (!this.queue.has(row.id) && !this.excluded(row) &&
             this.recentlyChecked.get(row.id) !== row.signature &&
             isRecentWeChatTime(row.time)) {
-          this.queue.set(row.id, { ...row, recentAudit: true });
+          this.enqueue(row, { recentAudit: true });
         }
+      }
+      if (this.activityPaused || this.native.control?.isWeChatInUse?.()) {
+        this.status = "检测到你正在用微信或有草稿，新消息先排队";
+        return;
       }
       const ready = [...this.queue.values()].filter((row) =>
         (!row.retryAfter || row.retryAfter <= Date.now()) &&
-        d.sessions.some((session) => session.id === row.id),
+        visible.has(row.id),
       );
-      const row = ready.find((candidate) => candidate.id === d.active?.sessionId) || ready[0];
-      if (!row) {
+      if (this.store.data.reception.modelBlockedUntil > Date.now()) {
+        this.status = "AI 接口限流，继续巡检，新消息保留在队列";
+        return;
+      }
+      const job = ready.find((candidate) => candidate.id === d.active?.sessionId) || ready[0];
+      if (!job) {
         this.status = this.queue.size
           ? "接待中 · 待切换的会话稍后重试"
           : "接待中 · 等待新的私聊和群聊消息";
         if (!this.queue.size && this.idleTime() >= 15) this.scanIdleMoments?.();
         return;
       }
-      if (row.recentAudit && !isRecentWeChatTime(row.time)) {
+      const row = { ...job, ...visible.get(job.id) };
+      if (row.recentAudit && !row.opened && !isRecentWeChatTime(row.time)) {
         this.queue.delete(row.id);
         return;
       }
-      if (row.unreadBacklog) {
+      if (row.unreadBacklog && !row.opened) {
         const current = d.sessions.find((session) => session.id === row.id);
         if (!current || !current.unread || current.systemOnly || current.today === false) {
           this.queue.delete(row.id);
@@ -326,7 +402,9 @@ class FleetAgent extends Agent {
             : "已发现新消息，等待空闲切换会话";
         return;
       }
-      this.queue.delete(row.id);
+      activeJob = { ...row, opened: true };
+      this.queue.set(row.id, activeJob);
+      this.saveQueue();
       this.phase("正在读取新消息会话…");
       let selected;
       try {
@@ -336,24 +414,23 @@ class FleetAgent extends Agent {
         });
       } catch (error) {
         if (ticket !== this.epoch) return;
-        this.queue.set(row.id, { ...row, retryAfter: Date.now() + 12000 });
-        this.status = "这段会话暂未切换，其他会话继续接待，稍后重试";
+        this.retry(activeJob, "这段会话暂未切换，其他会话继续接待，稍后重试");
         return;
       }
       if (ticket !== this.epoch) return;
       const context = selected.active;
       if (!context || context.sessionId !== row.id)
-        throw new Error("聊天身份无法核对，已停止");
+        throw new Error("聊天身份暂时无法核对");
       this.context = context;
       const capture = await this.capture();
       const snapshot = parseSnapshot(capture, this.settings());
       if (ticket !== this.epoch) return;
       if (!snapshot.titleVerified)
-        throw new Error("无法核对当前聊天标题，已停止");
+        throw new Error("暂时无法核对当前聊天标题");
       this.latest = snapshot;
       this.recentlyChecked.set(row.id, row.signature);
       if (row.recentAudit && context.kind !== "private") return;
-      if (row.systemOnly && !isRecentWeChatTime(capture.messageTime)) {
+      if (row.systemOnly && !row.retryFingerprint && !isRecentWeChatTime(capture.messageTime)) {
         this.status = "拍一拍之前没有可核对的近期正文，继续接待";
         return;
       }
@@ -380,7 +457,7 @@ class FleetAgent extends Agent {
         return;
       }
       if (this.activityPaused) {
-        this.queue.set(row.id, row);
+        this.queue.set(row.id, { ...activeJob });
         return;
       }
       if (!groupAllowed(context, snapshot, this.store.data.settings)) {
@@ -400,7 +477,8 @@ class FleetAgent extends Agent {
         sticker: /\[(?:动画)?表情\]/u,
         file: /\[文件\]/u,
       }[snapshot.last?.mediaType];
-      if (row.recentAudit && !row.systemOnly && !snapshot.last?.mediaType && snapshot.last?.role === "in") {
+      if ((row.recentAudit || row.opened) && !row.retryFingerprint &&
+          !row.systemOnly && row.preview && !snapshot.last?.mediaType && snapshot.last?.role === "in") {
         const preview = clean(row.preview);
         const last = clean(snapshot.last.text);
         if (snapshot.last.text.trim() !== row.preview?.trim() &&
@@ -426,31 +504,26 @@ class FleetAgent extends Agent {
         this.status = "等待下一条客户消息";
         return;
       }
+      activeJob.retryFingerprint = snapshot.fingerprint;
+      this.saveQueue();
       let plan;
       try {
         plan = await this.planSnapshot(snapshot, ticket);
       } catch (error) {
         if (!this.running || ticket !== this.epoch) return;
-        this.store.rememberModelRetry(row.id, {
-          fingerprint: snapshot.fingerprint,
-          failedAt: Date.now(),
+        if (error.rateLimited) this.store.saveReception({
+          ...this.store.data.reception,
+          modelBlockedUntil: Date.now() + error.retryDelay,
         });
-        const attempts = (row.modelRetryAttempts || 0) + 1;
-        if (attempts <= 2) {
-          this.queue.set(row.id, {
-            ...row,
-            retryFingerprint: snapshot.fingerprint,
-            modelRetryAttempts: attempts,
-          });
-          this.status = "AI 暂未生成回复，稍后自动重试";
-          this.store.log("warning", error.message);
-          return;
-        }
-        throw error;
+        this.retry(activeJob, error.rateLimited
+          ? "AI 接口限流，消息已排队等待重试"
+          : "AI 暂未生成回复，消息已保存，稍后自动重试",
+          error, error.retryDelay);
+        return;
       }
       if (ticket !== this.epoch) return;
       if (this.activityPaused) {
-        this.queue.set(row.id, row);
+        this.queue.set(row.id, { ...activeJob });
         return;
       }
       if (this.store.data.modelRetries[row.id])
@@ -471,8 +544,8 @@ class FleetAgent extends Agent {
           }
         : null;
       if (plan.kind === "auto" && this.draft) {
-        await this.deliver(plan.text, true, ticket);
-        this.processed++;
+        const result = await this.deliver(plan.text, true, ticket);
+        if (result.confirmed) this.processed++;
       } else {
         this.tasks = this.tasks.filter(
           (t) => t.context.sessionId !== context.sessionId,
@@ -492,7 +565,8 @@ class FleetAgent extends Agent {
         this.store.log("handoff", "有会话需要人工确认");
       }
     } catch (error) {
-      if (error.needsHuman && this.running && this.context && this.latest) {
+      if (!this.running || ticket !== this.epoch) return;
+      if (error.needsHuman && activeJob && this.context && this.latest) {
         this.tasks.unshift({
           id: crypto.randomUUID(),
           context: this.context,
@@ -505,16 +579,19 @@ class FleetAgent extends Agent {
         });
         this.tasks = this.tasks.slice(0, 30);
         this.status = "这段会话留给你处理，其他会话继续接待";
-      } else if (error.canRetry && this.running && ticket === this.epoch) {
-        const d = await this.discover().catch(() => null),
-          row = d?.sessions.find((r) => r.id === this.context?.sessionId);
-        if (row) this.queue.set(row.id, row);
-        this.status = "消息已更新，正在重新核对后回复";
+      } else if (error.deliveryUncertain) {
+        this.status = unknownDelivery;
+      } else if (activeJob) {
+        this.retry(activeJob, "本段会话暂未处理，稍后重试，其他会话继续接待", error);
       } else {
-        this.stop(error.message);
+        this.status = "本次巡检未完成，稍后自动重试";
         this.store.log("warning", error.message);
       }
     } finally {
+      if (ticket === this.epoch) {
+        if (activeJob && this.queue.get(activeJob.id) === activeJob) this.queue.delete(activeJob.id);
+        this.saveQueue();
+      }
       this.busy = false;
       this.emit();
       this.schedule();
@@ -610,7 +687,8 @@ class FleetAgent extends Agent {
       const record = this.store.data.ledger.find((r) => r.key === key);
       if (record?.status === "unconfirmed") this.store.record(key, "cancelled");
     }
-    this.queue.set(row.id, row);
+    this.enqueue(row);
+    this.saveQueue();
     this.emit();
     if (!this.busy) await this.tick();
     return this.state();

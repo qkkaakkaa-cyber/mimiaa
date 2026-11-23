@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Tray,
   ipcMain,
   safeStorage,
   shell,
@@ -38,6 +39,10 @@ app.setName("回响");
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
 let window,
+  tray,
+  startPromise,
+  trayMenuState = "",
+  resumeTimer,
   store,
   agent,
   native,
@@ -45,6 +50,7 @@ let window,
   sessionKey = "",
   sessionKeyBase = "";
 const uiFile = path.join(__dirname, "renderer/index.html");
+const systemHolds = new Set();
 const nativeBinary = app.isPackaged
   ? path.join(process.resourcesPath, "native/HuixiangBridge")
   : path.join(__dirname, "../native/bin/HuixiangBridge");
@@ -112,6 +118,81 @@ function safeIPC(name, fn) {
 function broadcast(state) {
   if (window && !window.isDestroyed())
     window.webContents.send("agent:state", state);
+  updateTray(state);
+}
+function showWorkbench() {
+  if (!window) createWindow();
+  else {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  }
+}
+function pauseReception(reason = "你已暂停接待") {
+  store.saveReception({ ...store.data.reception, enabled: false });
+  agent.stop(reason);
+  return agent.state();
+}
+async function startReception() {
+  if (systemHolds.size) throw new Error("电脑锁屏或休眠时暂停接待");
+  if (startPromise) return startPromise;
+  startPromise = (async () => {
+    try {
+      const state = await agent.start();
+      if (state.running) store.saveReception({ ...store.data.reception, enabled: true });
+      return state;
+    } catch (error) {
+      agent.stop(error.message);
+      throw error;
+    }
+  })();
+  try {
+    return await startPromise;
+  } finally {
+    startPromise = null;
+  }
+}
+function resumeReception() {
+  clearTimeout(resumeTimer);
+  if (!store.data.reception.enabled || systemHolds.size || agent.running) return;
+  if (agent.busy || startPromise) {
+    resumeTimer = setTimeout(resumeReception, 1000);
+    return;
+  }
+  startReception().catch(() => {
+    // A system permission may temporarily be unavailable after waking.
+    if (store.data.reception.enabled)
+      resumeTimer = setTimeout(resumeReception, 15000);
+  });
+}
+function updateTray(state) {
+  if (!tray) return;
+  const paused = state.activityPaused || systemHolds.size;
+  const label = state.running
+    ? paused ? "接待暂缓" : state.discovered ? "接待中" : "等待微信"
+    : systemHolds.size ? "接待暂缓" : "已暂停";
+  const queue = state.running ? state.queueSize : Object.keys(store.data.reception.pending).length;
+  const display = [label, state.status, queue, state.running, state.busy].join("|");
+  if (display === trayMenuState) return;
+  trayMenuState = display;
+  tray.setTitle("微响 · " + label);
+  tray.setToolTip(state.status);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: state.status, enabled: false },
+    { label: "待核对会话：" + queue, enabled: false },
+    { type: "separator" },
+    { label: "打开接待工作台", click: showWorkbench },
+    {
+      label: state.running || store.data.reception.enabled ? "暂停微信接待" : "开启微信接待",
+      enabled: state.running || store.data.reception.enabled || !state.busy,
+      click: () => {
+        if (agent.running || store.data.reception.enabled) pauseReception();
+        else startReception().catch(showWorkbench);
+      },
+    },
+    { type: "separator" },
+    { label: "退出微响", role: "quit" },
+  ]));
 }
 function createWindow() {
   window = new BrowserWindow({
@@ -134,9 +215,12 @@ function createWindow() {
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (e) => e.preventDefault());
-  window.once("ready-to-show", () => window.show());
+  const workbench = window;
+  workbench.once("ready-to-show", () => workbench.show());
+  workbench.once("closed", () => {
+    if (window === workbench) window = null;
+  });
   window.loadFile(uiFile);
-  window.on("close", () => agent?.stop("窗口关闭，接待已暂停"));
 }
 function register() {
   safeIPC("wechat-tools:load", () => store.data.wechatRecords);
@@ -172,7 +256,7 @@ function register() {
       (!store.data.settings.away?.enabled || !value.away.sessionId)
     )
       value.away.sessionId = require("node:crypto").randomUUID();
-    agent.stop("配置已更新，请重新开始接待");
+    pauseReception("配置已更新，请重新开始接待");
     agent.draft = null;
     agent.latest = null;
     const result = store.settings(value);
@@ -180,12 +264,12 @@ function register() {
     return result;
   });
   safeIPC("faq:save", (value) => {
-    agent.stop("业务资料已更新，请重新开始接待");
+    pauseReception("业务资料已更新，请重新开始接待");
     agent.draft = null;
     return store.faq(value);
   });
   safeIPC("faq:remove", (id) => {
-    agent.stop("业务资料已更新，请重新开始接待");
+    pauseReception("业务资料已更新，请重新开始接待");
     agent.draft = null;
     return store.removeFAQ(String(id));
   });
@@ -200,12 +284,12 @@ function register() {
       selected.filePaths[0],
       new NativeBridge(nativeBinary),
     );
-    agent.stop("业务资料已更新，请重新开始接待");
+    pauseReception("业务资料已更新，请重新开始接待");
     agent.draft = null;
     return store.document(value);
   });
   safeIPC("knowledge:remove", (id) => {
-    agent.stop("业务资料已更新，请重新开始接待");
+    pauseReception("业务资料已更新，请重新开始接待");
     return store.removeDocument(String(id));
   });
   safeIPC("agent:practice", async (value) => {
@@ -234,7 +318,13 @@ function register() {
   safeIPC("agent:summarize-current", (id) =>
     agent.summarizeCurrent(typeof id === "string" ? id.slice(0, 500) : ""),
   );
-  safeIPC("agent:review-task", (id) => agent.reviewTask(String(id)));
+  safeIPC("agent:review-task", async (id) => {
+    try {
+      return await agent.reviewTask(String(id));
+    } finally {
+      if (!agent.running) store.saveReception({ ...store.data.reception, enabled: false });
+    }
+  });
   safeIPC("agent:retry-current", (value) =>
     agent.retryCurrent(
       value && typeof value === "object"
@@ -259,18 +349,8 @@ function register() {
   });
   safeIPC("agent:read", () => agent.read());
   safeIPC("agent:generate", () => agent.generate());
-  safeIPC("agent:start", async () => {
-    try {
-      return await agent.start();
-    } catch (error) {
-      agent.stop(error.message);
-      throw error;
-    }
-  });
-  safeIPC("agent:stop", () => {
-    agent.stop("你已暂停接待");
-    return agent.state();
-  });
+  safeIPC("agent:start", startReception);
+  safeIPC("agent:stop", () => pauseReception());
   safeIPC("agent:send", (value) => agent.send(value));
   safeIPC("model:save-key", async (value) => {
     const plain = String(value || "").trim();
@@ -426,13 +506,30 @@ app
     );
     session.defaultSession.setPermissionCheckHandler(() => false);
     register();
+    tray = new Tray(nativeImage.createEmpty());
+    updateTray(agent.state());
     createWindow();
+    resumeReception();
     globalShortcut.register("CommandOrControl+Shift+.", () => {
-      agent.stop("已通过快捷键紧急暂停");
-      window?.show();
+      pauseReception("已通过快捷键紧急暂停");
+      showWorkbench();
     });
-    powerMonitor.on("lock-screen", () => agent.stop("电脑已锁屏，接待已暂停"));
-    powerMonitor.on("suspend", () => agent.stop("电脑即将休眠，接待已暂停"));
+    powerMonitor.on("lock-screen", () => {
+      systemHolds.add("lock");
+      agent.stop("电脑已锁屏，解锁后继续接待");
+    });
+    powerMonitor.on("suspend", () => {
+      systemHolds.add("sleep");
+      agent.stop("电脑休眠，唤醒后继续接待");
+    });
+    powerMonitor.on("unlock-screen", () => {
+      systemHolds.delete("lock");
+      resumeReception();
+    });
+    powerMonitor.on("resume", () => {
+      systemHolds.delete("sleep");
+      resumeReception();
+    });
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {
@@ -443,7 +540,7 @@ app
             {
               label: "暂停所有接待",
               accelerator: "CommandOrControl+Shift+.",
-              click: () => agent.stop("你已暂停所有接待"),
+              click: () => pauseReception("你已暂停所有接待"),
             },
             { type: "separator" },
             { role: "hide" },
@@ -464,7 +561,12 @@ app
         },
         {
           label: "窗口",
-          submenu: [{ role: "minimize" }, { role: "zoom" }, { role: "front" }],
+          submenu: [
+            { label: "关闭工作台（继续接待）", role: "close" },
+            { role: "minimize" },
+            { role: "zoom" },
+            { role: "front" },
+          ],
         },
       ]),
     );
@@ -473,17 +575,15 @@ app
     require("electron").dialog.showErrorBox("启动失败", e.message);
     app.quit();
   });
-app.on("second-instance", () => {
-  window?.show();
-  window?.focus();
-});
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+app.on("second-instance", () => { if (agent) showWorkbench(); });
+app.on("activate", () => { if (agent) showWorkbench(); });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 app.on("will-quit", () => {
+  clearTimeout(resumeTimer);
+  tray?.destroy();
+  tray = null;
   agent?.stop();
   globalShortcut.unregisterAll();
 });

@@ -226,6 +226,15 @@ class Intelligence {
       });
       if (response.status === 401 || response.status === 403)
         throw new Error("AI 密钥校验失败，请核对密钥和服务商账户状态");
+      if (response.status === 429) {
+        const error = new Error("AI 接口限流（429）");
+        const after = response.headers?.get("retry-after");
+        const delay = after && /^\d+(?:\.\d+)?$/.test(after)
+          ? Number(after) * 1000 : Date.parse(after) - Date.now();
+        error.rateLimited = true;
+        error.retryDelay = Number.isFinite(delay) ? Math.max(45000, delay) : 45000;
+        throw error;
+      }
       if (!response.ok)
         throw new Error(
           "AI 服务返回 " + response.status + "，请检查接口连接状态",

@@ -374,7 +374,7 @@ class Agent {
         if (confirmed || ticket !== this.epoch) break;
       }
       this.store.record(ledgerKey, confirmed ? "confirmed" : "unconfirmed");
-      this.latest = after;
+      if (after.titleVerified) this.latest = after;
       if (after.titleVerified)
         this.store.remember(
           this.memoryKey(),
@@ -391,7 +391,7 @@ class Agent {
         confirmed ? "sent" : "warning",
         confirmed ? "回复已发送并读回确认" : "已执行发送，但未能读回确认",
       );
-      if (!confirmed) this.stop(this.status);
+      if (!confirmed) this.unconfirmedDelivery(automatic, parsed);
       return { confirmed };
     } catch (e) {
       if (e.sendAttempted === false) {
@@ -399,14 +399,21 @@ class Agent {
         this.draft = null;
         this.status = e.message;
         if (/已有内容|已有草稿/.test(e.message)) e.needsHuman = true;
-        if (!e.canRetry && !e.needsHuman) this.stop(e.message);
+        if (!e.canRetry && !e.needsHuman) this.cancelledDelivery(e, automatic);
         throw e;
       }
       this.store.record(ledgerKey, "unconfirmed");
-      this.stop("发送未确认，请到微信检查；不会自动重发");
-      this.store.log("warning", "发送未确认，已停止接待");
+      e.deliveryUncertain = true;
+      this.unconfirmedDelivery(automatic, parsed);
+      this.store.log("warning", "发送未确认，等待人工核实");
       throw e;
     }
+  }
+  cancelledDelivery(error) {
+    this.stop(error.message);
+  }
+  unconfirmedDelivery() {
+    this.stop("发送未确认，请到微信检查；不会自动重发");
   }
 }
 module.exports = { Agent };
