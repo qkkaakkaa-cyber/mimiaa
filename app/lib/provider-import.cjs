@@ -16,12 +16,12 @@ function reusableKimiConfig(source) {
   };
   const key = value("moonshot_api_key").trim();
   if (!key || /your.?key|replace|示例|xxxx/i.test(key))
-    throw new Error("现有项目中没有可用的 Kimi 密钥");
+    throw new Error("现有配置中没有可用的 AI 接口密钥");
   const baseUrl = value("moonshot_base_url") || "https://api.moonshot.cn/v1";
   if (
     !["api.moonshot.cn", "api.moonshot.ai"].includes(new URL(baseUrl).hostname)
   )
-    throw new Error("复用配置的 Kimi 服务地址需要人工核对");
+    throw new Error("复用配置的 AI 服务地址需要人工核对");
   return {
     key,
     model: { baseUrl, name: "kimi-k2.6", visionName: "kimi-k2.6" },

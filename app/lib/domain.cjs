@@ -8,7 +8,7 @@ const DEFAULT_CALIBRATION = {
 };
 const DEFAULT_SETTINGS = {
   mode: "assist",
-  identity: { name: "回响助手", industry: "" },
+  identity: { name: "回响助手", industry: "", signReplies: true },
   personality: { preset: "warm", custom: "", learnFromHistory: false },
   away: {
     enabled: false,
@@ -16,7 +16,6 @@ const DEFAULT_SETTINGS = {
       "老板在睡觉，我是他的 AI 助理。有啥事儿可以先和我说，等他醒了，我提醒他回复你。你也可以先问我，想点子或者随便聊聊都行。你找他是有什么事儿？",
     sessionId: "",
   },
-  jobSource: { enabled: false, site: "https://thaichinesejobs.com" },
   wechatTools: {
     profileEnabled: false,
     profileHistoryEnabled: false,
@@ -26,7 +25,6 @@ const DEFAULT_SETTINGS = {
   reception: {
     privateChats: true,
     groupChats: true,
-    groupPolicy: "mentions",
     mentionName: "",
     excluded: [],
   },
@@ -92,6 +90,7 @@ function validateSettings(input) {
   return {
     mode,
     identity: {
+      signReplies: input.identity?.signReplies !== false,
       name:
         String(input.identity?.name || "")
           .trim()
@@ -120,10 +119,6 @@ function validateSettings(input) {
         .replace(/[^a-zA-Z0-9-]/g, "")
         .slice(0, 80),
     },
-    jobSource: {
-      enabled: input.jobSource?.enabled === true,
-      site: "https://thaichinesejobs.com",
-    },
     wechatTools: {
       profileEnabled: input.wechatTools?.profileEnabled === true,
       profileHistoryEnabled: input.wechatTools?.profileHistoryEnabled === true,
@@ -142,11 +137,6 @@ function validateSettings(input) {
     reception: {
       privateChats: input.reception?.privateChats !== false,
       groupChats: input.reception?.groupChats !== false,
-      groupPolicy: ["mentions", "questions", "all"].includes(
-        input.reception?.groupPolicy,
-      )
-        ? input.reception.groupPolicy
-        : "mentions",
       mentionName: String(input.reception?.mentionName || "")
         .trim()
         .slice(0, 100),

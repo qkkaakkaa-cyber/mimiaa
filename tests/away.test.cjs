@@ -54,13 +54,12 @@ test("睡觉代班每段聊天只开场一次，重新开启为新会话", async
     false,
   );
 });
-test("纯闲聊只调用一次对话模型，不检索岗位或资料", async () => {
+test("纯闲聊只调用一次对话模型，不检索业务资料", async () => {
   let calls = 0;
   const data = {
     settings: {
       ...DEFAULT_SETTINGS,
       away: { enabled: true },
-      jobSource: { enabled: true },
       model: { baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6" },
     },
     get faqs() {
@@ -72,12 +71,12 @@ test("纯闲聊只调用一次对话模型，不检索岗位或资料", async ()
   };
   const ai = new Intelligence({
     data,
-    getKey: async () => "",
+    getKey: async () => "test-key",
     fetchImpl: async (url, options) => {
       calls++;
       assert.ok(url.endsWith("/chat/completions"));
       const body = JSON.parse(options.body);
-      assert.ok(body.messages[0].content.includes("不查询招聘数据库"));
+      assert.ok(body.messages[0].content.includes("不检索业务资料"));
       return {
         ok: true,
         json: async () => ({
@@ -102,7 +101,7 @@ test("纯闲聊只调用一次对话模型，不检索岗位或资料", async ()
   assert.equal(calls, 1);
   assert.equal(result.canAuto, true);
 });
-test("普通招聘模式不能用无来源闲聊动作绕过依据校验", () => {
+test("普通接待模式不能用无来源闲聊动作绕过依据校验", () => {
   assert.throws(() =>
     validateDecision(
       { action: "chat", reply: "随便编业务" },

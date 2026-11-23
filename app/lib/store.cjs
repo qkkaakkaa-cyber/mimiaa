@@ -261,6 +261,16 @@ class Store {
           !r.finished && Date.now() - Date.parse(r.updatedAt) >= 10 * 60 * 1000,
       }));
   }
+  attributeConversation(context, snapshot, name) {
+    const entry = this.data.conversationReports.find(
+      (record) =>
+        record.sessionId === context.sessionId &&
+        record.fingerprint === snapshot.fingerprint,
+    );
+    if (!entry) return;
+    entry.assistantName = name;
+    this.flush();
+  }
   log(type, message) {
     this.data.events.unshift({
       id: require("node:crypto").randomUUID(),

@@ -119,6 +119,12 @@ class FleetAgent extends Agent {
     const greetingKey = this.draft?.awayGreetingKey,
       context = this.context,
       snapshot = this.latest;
+    const identity = this.settings().identity;
+    if (automatic && identity.signReplies && text) {
+      const signature = ` · ${identity.name}`;
+      if (!text.endsWith(signature))
+        text = text.trimEnd().slice(0, 1500 - signature.length) + signature;
+    }
     const result = await super.deliver(text, automatic, ticket);
     if (result.confirmed) {
       if (context && snapshot)
@@ -130,6 +136,8 @@ class FleetAgent extends Agent {
           this.analysis?.action === "wrapup",
         );
       if (greetingKey) this.store.markAwayGreeting(greetingKey);
+      if (automatic && context && snapshot)
+        this.store.attributeConversation(context, snapshot, identity.name);
       const hasOwnerTodo = this.analysis?.conversationReport
         ? this.analysis.conversationReport.ownerTodo.length > 0
         : !!this.analysis?.summary;

@@ -144,9 +144,25 @@ test("群聊触发范围及未知类型不会误回复", () => {
     groupAllowed({ kind: "unknown" }, { last: { text: "@小明" } }, settings),
     false,
   );
-  settings.reception.groupPolicy = "all";
+  for (const oldMode of ["all", "questions"]) {
+    settings.reception.groupPolicy = oldMode;
+    for (const text of [
+      "请问几点开门？",
+      "@小明同学 你好",
+      "abc@小明 你好",
+      "@所有人 有问题吗？",
+    ])
+      assert.equal(
+        groupAllowed({ kind: "group" }, { last: { text } }, settings),
+        false,
+      );
+  }
   assert.equal(
-    groupAllowed({ kind: "group" }, { last: { text: "大家好" } }, settings),
+    groupAllowed(
+      { kind: "group" },
+      { last: { text: "请教一下 @小明\u2005几点开门" } },
+      settings,
+    ),
     true,
   );
 });
@@ -174,6 +190,44 @@ test("发现结构自动提取原生微信会话与输入位置，过滤系统�
   assert.equal(d.active.expectedTitle, "甲");
   assert.equal(d.active.kind, "private");
   assert.equal(d.active.windowId, 8);
+});
+test("微信把成员数拆成独立控件时仍识别为群聊", () => {
+  const item = (id, value, x, y, w, h) => ({
+    id,
+    value,
+    frame: { x, y, w, h },
+  });
+  const view = discoverFromAX({
+    windowId: 8,
+    pid: 1,
+    frame: { x: 0, y: 0, w: 1000, h: 800 },
+    items: [
+      item("session_list", "", 60, 80, 250, 700),
+      item(
+        "session_item_项目协作",
+        "项目协作\n请问几点开门？\n12:00",
+        60,
+        90,
+        250,
+        70,
+      ),
+      item("big_title_line_h_view", "项目协作(480)", 340, 20, 160, 30),
+      item("current_chat_name_label", "项目协作", 340, 20, 120, 30),
+      item("current_chat_count_label", "(480)", 460, 20, 65, 30),
+      item("chat_message_list", "", 310, 90, 680, 480),
+      item("chat_input_field", "", 320, 620, 650, 130),
+      item("voip_button", "语音通话", 900, 20, 30, 30),
+    ],
+  });
+  assert.equal(view.active.kind, "group");
+  assert.equal(
+    groupAllowed(
+      view.active,
+      { last: { text: "请问几点开门？" } },
+      { reception: { groupChats: true, mentionName: "小明" } },
+    ),
+    false,
+  );
 });
 test("模型等待时取消接待，不会生成或发送过期方案", async (t) => {
   const f = fixture(t);

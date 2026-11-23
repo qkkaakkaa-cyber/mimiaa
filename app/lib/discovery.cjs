@@ -77,12 +77,15 @@ function discoverFromAX(raw) {
     const rawName = textOf(title),
       name = rawName.replace(/\s*[（(]\d+[)）]\s*$/, "").trim(),
       session = unique.find((s) => s.name === name);
+    const fullHeader = textOf(find("big_title_line_h_view"));
+    const memberCount = textOf(find("current_chat_count_label"));
     const voip = items.find((i) => i.id === "voip_button"),
       callText = textOf(voip);
     // A member count or a group-call control is positive group evidence.
     // A one-to-one voice-call control identifies a private conversation.
     const kind =
-      /[（(]\d+[)）]\s*$/.test(rawName) ||
+      /^\(?\d+\)?$/.test(memberCount) ||
+      /[（(]\d+[)）]\s*$/.test(fullHeader || rawName) ||
       /群.*(?:通话|语音)|group/i.test(callText)
         ? "group"
         : /^语音通话$|^voice call$/i.test(callText)
@@ -177,14 +180,13 @@ function groupAllowed(context, snapshot, settings) {
   const scope = settings.reception;
   if (context.kind === "private") return scope.privateChats;
   if (context.kind === "unknown") return false;
-  if (!scope.groupChats) return false;
-  if (scope.groupPolicy === "all") return true;
-  const message = snapshot.last?.text || "";
-  if (
-    scope.groupPolicy === "questions" &&
-    /[?？]|请问|咨询|怎么|如何|哪里|什么时候|能不能|可以吗/.test(message)
-  )
-    return true;
-  return !!scope.mentionName && message.includes("@" + scope.mentionName);
+  const name = normalize(scope.mentionName).replace(/^@+/, "").trim();
+  if (!scope.groupChats || !name) return false;
+  const mention = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const message = normalize(snapshot.last?.text);
+  return new RegExp(
+    `(?:^|[\\s、，。！？；：,:!?;])@${mention}(?=$|\\s)`,
+    "u",
+  ).test(message);
 }
 module.exports = { discoverFromAX, groupAllowed };

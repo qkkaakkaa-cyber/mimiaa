@@ -28,6 +28,11 @@ const {
 const { validateEndpoint } = require("./lib/domain.cjs");
 const { readBusinessDocument } = require("./lib/documents.cjs");
 const { WeChatTools } = require("./lib/wechat-tools.cjs");
+const defaultAIModel = {
+  baseUrl: "https://api.moonshot.cn/v1",
+  name: "kimi-k3.1-pro",
+  visionName: "kimi-k3.1-pro",
+};
 app.setName("回响");
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
@@ -229,12 +234,6 @@ function register() {
     agent.summarizeCurrent(typeof id === "string" ? id.slice(0, 500) : ""),
   );
   safeIPC("agent:review-task", (id) => agent.reviewTask(String(id)));
-  safeIPC("jobs:test", () =>
-    new (require("./lib/jobs.cjs").JobCatalog)().search({
-      q: "翻译",
-      province: "rayong",
-    }),
-  );
   safeIPC("agent:retry-current", (value) =>
     agent.retryCurrent(
       value && typeof value === "object"
@@ -275,6 +274,9 @@ function register() {
   safeIPC("model:save-key", async (value) => {
     const plain = String(value || "").trim();
     if (plain.length > 2000) throw new Error("密钥过长");
+    const model = store.data.settings.model;
+    if (plain && (!model.baseUrl || !model.name))
+      store.settings({ ...store.data.settings, model: defaultAIModel });
     sessionKey = plain;
     sessionKeyBase = store.data.settings.model.baseUrl
       ? validateEndpoint(store.data.settings.model.baseUrl)
@@ -302,6 +304,9 @@ function register() {
     return { persisted: true };
   });
   safeIPC("model:test", () => agent.modelReply([], true));
+  safeIPC("model:get-key", () =>
+    shell.openExternal("https://platform.kimi.com/console/api-keys"),
+  );
   safeIPC("app:open-settings", (type) => {
     const targets = {
       screen:
