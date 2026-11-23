@@ -77,4 +77,4 @@ execFileSync(
   ["--force", ...signing, root + "/native/bin/MacControl.node"],
   { stdio: "inherit" },
 );
-console.log("本机微信组件已构建（键鼠操作使用回响主进程权限）");
+console.log("本机微信组件已构建（键鼠操作使用微响主进程权限）");

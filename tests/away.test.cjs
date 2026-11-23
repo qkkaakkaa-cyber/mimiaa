@@ -59,6 +59,7 @@ test("纯闲聊只调用一次对话模型，不检索业务资料", async () =>
   const data = {
     settings: {
       ...DEFAULT_SETTINGS,
+      identity: { name: "狗子", signReplies: true },
       away: { enabled: true },
       model: { baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6" },
     },
@@ -77,6 +78,9 @@ test("纯闲聊只调用一次对话模型，不检索业务资料", async () =>
       assert.ok(url.endsWith("/chat/completions"));
       const body = JSON.parse(options.body);
       assert.ok(body.messages[0].content.includes("不检索业务资料"));
+      assert.match(body.messages[0].content, /我是狗子，老板的 AI 助手/);
+      assert.deepEqual(body.messages[1], { role: "assistant", content: "可以呀" });
+      assert.deepEqual(body.messages[2], { role: "user", content: "你是谁？" });
       return {
         ok: true,
         json: async () => ({
@@ -85,7 +89,7 @@ test("纯闲聊只调用一次对话模型，不检索业务资料", async () =>
               message: {
                 content: JSON.stringify({
                   action: "chat",
-                  reply: "当然可以聊，你今天过得怎么样？",
+                  reply: "我是狗子，老板的 AI 助手。 · 狗子",
                   reason: "自然接话",
                   sourceIds: [],
                   customerSummary: "",
@@ -97,9 +101,13 @@ test("纯闲聊只调用一次对话模型，不检索业务资料", async () =>
       };
     },
   });
-  const result = await ai.decide([{ role: "in", text: "聊点什么吧" }]);
+  const result = await ai.decide(
+    [{ role: "in", text: "你是谁？" }],
+    { messages: [{ role: "out", text: "可以呀 · 狗子" }] },
+  );
   assert.equal(calls, 1);
   assert.equal(result.canAuto, true);
+  assert.equal(result.reply, "我是狗子，老板的 AI 助手。");
 });
 test("普通接待模式不能用无来源闲聊动作绕过依据校验", () => {
   assert.throws(() =>

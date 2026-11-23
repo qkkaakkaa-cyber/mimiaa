@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, accessSync, constants, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url)),
-  source = root + "/dist/回响.app",
+  source = root + "/dist/微响.app",
   target = "/Applications/回响.app";
 if (!existsSync(source)) throw new Error("请先构建应用包");
 accessSync("/Applications", constants.W_OK);

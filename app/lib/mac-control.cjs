@@ -31,7 +31,7 @@ class MacControlBridge {
       return {
         screen: capture.screen,
         accessibility: this.control.isTrusted(),
-        permissionOwner: "回响",
+        permissionOwner: "微响",
         controlReady: true,
       };
     }
@@ -203,7 +203,7 @@ class MacControlBridge {
         height,
       } = payload;
       if (!this.control.isTrusted())
-        throw new Error("回响尚未获得辅助功能权限，请在系统设置中开启");
+        throw new Error("微响尚未获得辅助功能权限，请在系统设置中开启");
       if (
         !Number.isSafeInteger(windowId) ||
         !expectedTitle ||

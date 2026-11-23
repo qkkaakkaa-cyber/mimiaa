@@ -44,7 +44,7 @@ struct Shot { let image:CGImage;let window:SCWindow;let lines:[[String:Any]] }
 @available(macOS 14.0, *)
 @MainActor
 func shot(_ id: CGWindowID) async throws -> Shot {
-    guard CGPreflightScreenCaptureAccess() else {throw BridgeError("需要屏幕录制权限，请在系统设置中为回响开启")}
+    guard CGPreflightScreenCaptureAccess() else {throw BridgeError("需要屏幕录制权限，请在系统设置中为微响开启")}
     let content=try await SCShareableContent.excludingDesktopWindows(true,onScreenWindowsOnly:true)
     guard let window=content.windows.first(where:{$0.windowID==id}),let app=window.owningApplication,isWeChat(app.processID) else {throw BridgeError("未找到选定的微信窗口，请重新连接")}
     guard window.frame.width>=300 && window.frame.height>=300 else {throw BridgeError("微信窗口太小，请展开聊天窗口")}

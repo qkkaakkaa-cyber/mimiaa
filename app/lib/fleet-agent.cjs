@@ -120,11 +120,6 @@ class FleetAgent extends Agent {
       context = this.context,
       snapshot = this.latest;
     const identity = this.settings().identity;
-    if (automatic && identity.signReplies && text) {
-      const signature = ` · ${identity.name}`;
-      if (!text.endsWith(signature))
-        text = text.trimEnd().slice(0, 1500 - signature.length) + signature;
-    }
     const result = await super.deliver(text, automatic, ticket);
     if (result.confirmed) {
       if (context && snapshot)
@@ -191,9 +186,9 @@ class FleetAgent extends Agent {
     this.stop("正在自动查找微信…");
     const permissions = await this.native.request("permissions");
     if (!permissions.accessibility)
-      throw new Error("请先为回响开启辅助功能，才能自动识别会话");
+      throw new Error("请先为微响开启辅助功能，才能自动识别会话");
     if (!permissions.screen)
-      throw new Error("请先为回响开启屏幕录制，用于本地核对消息");
+      throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
     const d = await this.discover();
     this.seen = new Map(d.sessions.map((s) => [s.id, s.signature]));
     this.queue.clear();
@@ -222,7 +217,7 @@ class FleetAgent extends Agent {
   async read() {
     if (this.busy) throw new Error("上一项操作还在进行");
     const d = await this.discover();
-    if (!d.active) throw new Error("请在微信打开一段聊天，回响会自动识别");
+    if (!d.active) throw new Error("请在微信打开一段聊天，微响会自动识别");
     this.context = d.active;
     return super.read();
   }

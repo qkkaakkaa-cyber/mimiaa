@@ -51,7 +51,7 @@ CGRect bounds(AXUIElementRef window) {
 struct Target {
   pid_t pid;CGRect frame;AXUIElementRef app;
   Target(napi_env env,napi_value params) {
-    if(!AXIsProcessTrusted())throw std::runtime_error("回响尚未获得辅助功能权限，请在系统设置中开启");
+    if(!AXIsProcessTrusted())throw std::runtime_error("微响尚未获得辅助功能权限，请在系统设置中开启");
     double rawPID=number(env,params,"pid");
     if(rawPID<=0 || rawPID>INT32_MAX || std::floor(rawPID)!=rawPID)throw std::runtime_error("微信进程编号无效");
     pid=(pid_t)rawPID;
@@ -153,7 +153,7 @@ void walk(AXUIElementRef node,NSMutableArray *items,int depth,int &count) {
 }
 napi_value inspectWindow(napi_env env,bool social){
  @autoreleasepool {try{
-  if(!AXIsProcessTrusted())throw std::runtime_error("请先为回响开启辅助功能权限");
+  if(!AXIsProcessTrusted())throw std::runtime_error("请先为微响开启辅助功能权限");
   NSRunningApplication *running=nil;
   for(NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications)if([@[@"com.tencent.xinWeChat",@"com.tencent.WeChat"] containsObject:app.bundleIdentifier]){running=app;break;}
   if(!running)throw std::runtime_error("请先登录电脑微信");
@@ -171,7 +171,7 @@ napi_value inspectWindow(napi_env env,bool social){
     [results addObject:@{@"pid":@(running.processIdentifier),@"frame":rectJSON(frame),@"windowId":windowID,@"items":items,@"title":stringAttr(win,kAXTitleAttribute)}];if(!social)break;
   }
   if(windows)CFRelease(windows);
-  if(!results.count)throw std::runtime_error(social?"请打开电脑微信":"请展开微信的聊天列表，回响会自动识别");
+  if(!results.count)throw std::runtime_error(social?"请打开电脑微信":"请展开微信的聊天列表，微响会自动识别");
   NSData *json=[NSJSONSerialization dataWithJSONObject:social?(id)results:results.firstObject options:0 error:nil];napi_value out;napi_create_string_utf8(env,(const char*)json.bytes,json.length,&out);return out;
  }catch(const std::exception &error){napi_throw_error(env,nullptr,error.what());return nullptr;}}
 }
@@ -202,7 +202,7 @@ napi_value Capture(napi_env env,napi_callback_info info){
  napi_threadsafe_function callback;auto *context=new CaptureContext{deferred};
  if(napi_create_threadsafe_function(env,nullptr,nullptr,resourceName,1,1,nullptr,nullptr,context,captureCallback,&callback)!=napi_ok){delete context;napi_throw_error(env,nullptr,"无法创建截图回调");return nullptr;}
 
- if(!CGPreflightScreenCaptureAccess()){settleCapture(callback,nil,@"需要为当前回响开启屏幕录制权限");return promise;}
+ if(!CGPreflightScreenCaptureAccess()){settleCapture(callback,nil,@"需要为当前微响开启屏幕录制权限");return promise;}
  [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content,NSError *error){
   if(error){settleCapture(callback,nil,error.localizedDescription);return;}
   dispatch_async(dispatch_get_main_queue(), ^{

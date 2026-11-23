@@ -15,11 +15,11 @@ const require = createRequire(import.meta.url);
 const manifest = JSON.parse(readFileSync(root + "/package.json", "utf8"));
 const electron = require("electron");
 const base = electron.slice(0, electron.indexOf("/Contents/MacOS/"));
-const app = root + "/dist/回响.app";
+const app = root + "/dist/微响.app";
 mkdirSync(root + "/dist", { recursive: true });
 if (existsSync(app))
   throw new Error(
-    "dist/回响.app 已存在。请先移走旧版本，再重新构建，避免覆盖正在使用的软件。",
+    "dist/微响.app 已存在。请先移走旧版本，再重新构建，避免覆盖正在使用的软件。",
   );
 cpSync(base, app, { recursive: true, verbatimSymlinks: true });
 const resources = app + "/Contents/Resources";
@@ -29,7 +29,7 @@ writeFileSync(
   resources + "/app/package.json",
   JSON.stringify({
     name: "huixiang-desktop",
-    productName: "回响",
+    productName: manifest.productName,
     version: manifest.version,
     main: "app/main.cjs",
   }),
@@ -91,15 +91,15 @@ execFileSync("iconutil", [
 const plist = app + "/Contents/Info.plist";
 for (const [key, value] of Object.entries({
   CFBundleIdentifier: "com.huixiang.desktop",
-  CFBundleName: "回响",
-  CFBundleDisplayName: "回响",
+  CFBundleName: manifest.productName,
+  CFBundleDisplayName: "微响",
   CFBundleExecutable: "Huixiang",
   CFBundleShortVersionString: manifest.version,
   CFBundleVersion: "1",
   CFBundleIconFile: "AppIcon.icns",
-  NSHumanReadableCopyright: "回响 · 本地预览版",
-  NSCameraUsageDescription: "回响不使用摄像头",
-  NSMicrophoneUsageDescription: "回响不使用麦克风",
+  NSHumanReadableCopyright: "微响 · 本地预览版",
+  NSCameraUsageDescription: "微响不使用摄像头",
+  NSMicrophoneUsageDescription: "微响不使用麦克风",
 })) {
   try {
     execFileSync(
@@ -117,7 +117,7 @@ for (const [key, value] of Object.entries({
 }
 execFileSync("/usr/libexec/PlistBuddy", [
   "-c",
-  "Add :NSScreenCaptureUsageDescription string 回响读取你选定的微信窗口，用于识别消息并准备回复。",
+  "Add :NSScreenCaptureUsageDescription string 微响读取你选定的微信窗口，用于识别消息并准备回复。",
   plist,
 ]);
 renameSync(app + "/Contents/MacOS/Electron", app + "/Contents/MacOS/Huixiang");

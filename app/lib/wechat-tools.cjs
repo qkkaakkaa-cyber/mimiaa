@@ -194,7 +194,7 @@ class WeChatTools {
     const view = await this.openMoments();
     this.tap(view, button(view, "发表"), kind === "text" ? 1200 : 0);
     if (kind === "media")
-      return { draft, message: "已打开微信选图；可以从回响复制正文" };
+      return { draft, message: "已打开微信选图；可以从微响复制正文" };
     for (let tries = 0; tries < 5; tries++) {
       await this.native.sleep(220);
       const editor = this.views().find(

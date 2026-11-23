@@ -8,12 +8,12 @@ const DEFAULT_CALIBRATION = {
 };
 const DEFAULT_SETTINGS = {
   mode: "assist",
-  identity: { name: "回响助手", industry: "", signReplies: true },
+  identity: { name: "微响助手", industry: "" },
   personality: { preset: "warm", custom: "", learnFromHistory: false },
   away: {
     enabled: false,
     greeting:
-      "老板在睡觉，我是他的 AI 助理。有啥事儿可以先和我说，等他醒了，我提醒他回复你。你也可以先问我，想点子或者随便聊聊都行。你找他是有什么事儿？",
+      "老板在休息。有事可以先跟我说，我帮你记下来。也可以直接问我，或者随便聊聊。",
     sessionId: "",
   },
   wechatTools: {
@@ -90,7 +90,6 @@ function validateSettings(input) {
   return {
     mode,
     identity: {
-      signReplies: input.identity?.signReplies !== false,
       name:
         String(input.identity?.name || "")
           .trim()

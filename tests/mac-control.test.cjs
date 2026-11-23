@@ -56,12 +56,12 @@ function fixture() {
   };
   return { bridge, helper, control, capture, payload, calls };
 }
-test("权限显示使用实际执行键鼠操作的回响进程，不使用子进程的 AX 状态", async () => {
+test("权限显示使用实际执行键鼠操作的微响进程，不使用子进程的 AX 状态", async () => {
   const { bridge } = fixture();
   const status = await bridge.request("permissions");
   assert.equal(status.accessibility, true);
   assert.equal(status.screen, true);
-  assert.equal(status.permissionOwner, "回响");
+  assert.equal(status.permissionOwner, "微响");
 });
 test("主进程未授权时不能把子进程的授权当成可用", async () => {
   const { bridge, control, helper } = fixture();

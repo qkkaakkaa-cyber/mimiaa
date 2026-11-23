@@ -33,6 +33,7 @@ const defaultAIModel = {
   name: "kimi-k3.1-pro",
   visionName: "kimi-k3.1-pro",
 };
+// Keep the original Electron identity for the existing data and encrypted key.
 app.setName("回响");
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
@@ -119,7 +120,7 @@ function createWindow() {
     minWidth: 420,
     minHeight: 580,
     backgroundColor: "#f5f7fa",
-    title: "回响 · 微信接待助手",
+    title: "微响 · 微信接待助手",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     show: false,
@@ -326,7 +327,7 @@ app
     try {
       store = new Store(path.join(app.getPath("userData"), "workspace"));
     } catch (e) {
-      require("electron").dialog.showErrorBox("无法打开回响", e.message);
+      require("electron").dialog.showErrorBox("无法打开微响", e.message);
       app.quit();
       return;
     }
@@ -393,7 +394,7 @@ app
         ) {
           if (Notification.isSupported())
             new Notification({
-              title: "回响 · 有对话需要你",
+              title: "微响 · 有对话需要你",
               body: "请打开接待工作台查看。",
             }).show();
         }
@@ -431,7 +432,7 @@ app
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {
-          label: "回响",
+          label: "微响",
           submenu: [
             { role: "about" },
             { type: "separator" },
