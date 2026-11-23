@@ -102,17 +102,21 @@ AXUIElementRef findTargetWindow(const Target &target) {
   if(!chosen)throw std::runtime_error("微信窗口布局已变化，请重新读取");
   return chosen;
 }
-void focus(napi_env env,napi_value params) {
-  Target target(env,params);
-  AXUIElementRef chosen=findTargetWindow(target);
-  NSRunningApplication *wechat=[NSRunningApplication runningApplicationWithProcessIdentifier:target.pid];
+AXError raiseWeChatWindow(NSRunningApplication *wechat,AXUIElementRef window) {
   if (NSApp.isActive) {
     [NSApp yieldActivationToApplication:wechat];
     [wechat activateFromApplication:NSRunningApplication.currentApplication options:NSApplicationActivateAllWindows];
   } else {
     [wechat activateWithOptions:NSApplicationActivateAllWindows];
   }
-  AXError result=AXUIElementPerformAction(chosen,kAXRaiseAction);CFRelease(chosen);
+  return AXUIElementPerformAction(window,kAXRaiseAction);
+}
+void focus(napi_env env,napi_value params) {
+  Target target(env,params);
+  AXUIElementRef chosen=findTargetWindow(target);
+  NSRunningApplication *wechat=[NSRunningApplication runningApplicationWithProcessIdentifier:target.pid];
+  AXError result=raiseWeChatWindow(wechat,chosen);
+  CFRelease(chosen);
   if(result!=kAXErrorSuccess)throw std::runtime_error("无法激活已选定的微信窗口");
 }
 void clickInput(napi_env env,napi_value params) {
@@ -591,12 +595,18 @@ napi_value RevealWeChatWindow(napi_env env,napi_callback_info) {
       if (!main) throw std::runtime_error("微信主窗口尚未打开");
       const bool hidden=wechat.hidden;
       const bool minimized=boolAttr(main,kAXMinimizedAttribute);
+      if (hidden && ![wechat unhide]) {
+        CFRelease(main);
+        throw std::runtime_error("微信主窗口暂时无法取消隐藏");
+      }
       const AXError result=minimized
         ? AXUIElementSetAttributeValue(main,kAXMinimizedAttribute,kCFBooleanFalse) : kAXErrorSuccess;
+      if (result==kAXErrorSuccess && (hidden || minimized)) raiseWeChatWindow(wechat,main);
       CFRelease(main);
-      if (result!=kAXErrorSuccess) throw std::runtime_error("微信主窗口暂时无法取消最小化");
-      if (wechat.hidden && ![wechat unhide])
-        throw std::runtime_error("微信主窗口暂时无法取消隐藏");
+      if (result!=kAXErrorSuccess) {
+        if (hidden) [wechat hide];
+        throw std::runtime_error("微信主窗口暂时无法取消最小化");
+      }
       napi_value out, value;
       napi_create_object(env,&out);
       napi_create_int32(env,pid,&value);

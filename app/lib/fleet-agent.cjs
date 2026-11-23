@@ -208,6 +208,19 @@ class FleetAgent extends Agent {
     this.queue?.clear();
     this.revealedWindow = null;
   }
+  restoreHiddenWindow() {
+    const window = this.revealedWindow;
+    if (!window || this.idleTime() < 8 || this.native.control?.isWeChatInUse?.()) return false;
+    this.revealedWindow = null;
+    this.nextHiddenCheck = Date.now() + hiddenCheckInterval;
+    try {
+      this.parkChatList(window);
+      this.discovery = null;
+      return true;
+    } catch {
+      return false;
+    }
+  }
   saveQueue() {
     const pending = Object.fromEntries([...this.queue].map(([id, row]) => [
       id, {
@@ -338,7 +351,9 @@ class FleetAgent extends Agent {
           d = await this.discover();
         } catch {
           if (ticket === this.epoch)
-            this.status = "微信主列表暂不可用，稍后自动恢复";
+            this.status = this.restoreHiddenWindow()
+              ? "微信主列表暂不可用，已恢复隐藏 · 5 分钟后再检查"
+              : "微信主列表暂不可用，稍后自动恢复";
           return;
         }
       }
@@ -396,17 +411,8 @@ class FleetAgent extends Agent {
         this.status = "检测到你正在用微信或有草稿，新消息先排队";
         return;
       }
-      if (this.revealedWindow && !this.queue.size && this.idleTime() >= 8) {
-        const window = this.revealedWindow;
-        this.revealedWindow = null;
-        this.nextHiddenCheck = Date.now() + hiddenCheckInterval;
-        try {
-          this.parkChatList(window);
-          this.discovery = null;
-          this.status = "巡检完成，已恢复微信隐藏状态 · 5 分钟后再检查";
-        } catch {
-          this.status = "巡检完成，微信窗口暂时保留";
-        }
+      if (!this.queue.size && this.restoreHiddenWindow()) {
+        this.status = "巡检完成，已恢复微信隐藏状态 · 5 分钟后再检查";
         return;
       }
       const ready = [...this.queue.values()].filter((row) =>
