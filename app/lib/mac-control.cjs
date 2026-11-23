@@ -142,7 +142,7 @@ class MacControlBridge {
     if (before.active?.sessionId === id) return before;
     if (!manual && this.idleTime() < 5)
       throw new Error("已发现消息，等待空闲时切换会话");
-    if (!manual && this.control.isWeChatActive?.())
+    if (!manual && this.control.isWeChatInUse?.())
       throw new Error("你正在使用微信，AI 已自动暂停");
     const previousPID = this.control.frontmostPID?.();
     const target = { pid: before.pid, frame: before.frame };
@@ -159,9 +159,11 @@ class MacControlBridge {
         !sameWindow(current, target)
       )
         throw new Error("会话列表或窗口位置已变化");
+      if (!manual && this.control.isWeChatInUse?.())
+        throw new Error("你正在使用微信，稍后继续接待");
       this.control.clickInput({ ...target, input: again.point });
       await this.sleep(manual ? 420 : 5200);
-      if (!manual && this.idleTime() < 5)
+      if (!manual && (this.idleTime() < 5 || this.control.isWeChatInUse?.()))
         throw new Error("检测到人工操作，稍后继续接待");
       if (ticket !== this.epoch) throw new Error("接待已暂停");
       const after = discover();
@@ -178,7 +180,7 @@ class MacControlBridge {
         if (
           previousPID &&
           previousPID !== target.pid &&
-          (manual || this.idleTime() >= 5)
+          (manual || (this.idleTime() >= 5 && !this.control.isWeChatInUse?.()))
         ) {
           this.control.restoreFocus?.({ pid: previousPID });
           await this.sleep(250);
@@ -264,7 +266,7 @@ class MacControlBridge {
       let current = await capture({ empty: true });
       const target = { pid: current.window.pid, frame: current.window.frame };
       if (this.backgroundCapable) {
-        if (payload.automatic && this.control.isWeChatActive?.())
+        if (payload.automatic && this.control.isWeChatInUse?.())
           throw new Error("你正在操作微信，本次保留草稿");
         checkCancelled();
         const historyOf = (raw) =>
@@ -306,15 +308,15 @@ class MacControlBridge {
             throw new Error("微信窗口位置变化，保留草稿");
         }
         checkCancelled();
-        if (payload.automatic && this.control.isWeChatActive?.())
+        if (payload.automatic && this.control.isWeChatInUse?.())
           throw new Error("你正在使用微信，自动暂停");
-        commitStarted = true;
         this.control.pressSend({
           ...target,
           expectedTitle,
           text,
           ...(expectedMessages ? { expectedMessages } : {}),
         });
+        commitStarted = true;
         await this.sleep(500);
         return { attempted: true };
       }

@@ -129,7 +129,7 @@ test("在其他应用打字时，后台发送不激活微信或注入全局按�
   const { bridge, control, payload, calls } = fixture();
   bridge.backgroundCapable = true;
   bridge.idleTime = () => 0;
-  control.isWeChatActive = () => false;
+  control.isWeChatInUse = () => false;
   control.setComposer = (p) => control.typeChunk(p);
   control.pressSend = (p) => calls.push(["ax-send", p]);
   await bridge.request("send", { ...payload, automatic: true });
@@ -140,7 +140,7 @@ test("用户正在微信操作时，后台发送保留草稿而不抢输入", as
   const { bridge, control, payload, calls } = fixture();
   bridge.backgroundCapable = true;
   bridge.idleTime = () => 0;
-  control.isWeChatActive = () => true;
+  control.isWeChatInUse = () => true;
   control.setComposer = () => calls.push(["set"]);
   control.pressSend = () => calls.push(["send"]);
   await assert.rejects(
@@ -150,6 +150,20 @@ test("用户正在微信操作时，后台发送保留草稿而不抢输入", as
   assert.ok(
     !calls.some((c) => ["set", "send", "focus", "click"].includes(c[0])),
   );
+});
+test("点击发送前微信重新被操作，保留草稿并允许稍后继续", async () => {
+  const { bridge, control, payload, calls } = fixture();
+  bridge.backgroundCapable = true;
+  control.isWeChatInUse = () => false;
+  control.setComposer = (params) => control.typeChunk(params);
+  control.pressSend = () => {
+    throw new Error("你正在使用微信，自动暂停");
+  };
+  await assert.rejects(
+    () => bridge.request("send", { ...payload, automatic: true }),
+    { sendAttempted: false, inputPrepared: true, canRetry: true },
+  );
+  assert.ok(calls.some(([action]) => action === "type"));
 });
 test("时间标签变化不会被当成客户正文变化而取消发送", async () => {
   const { bridge, payload, capture } = fixture();
@@ -168,6 +182,7 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   });
   let selected = "甲",
     restored = false,
+    userTookOver = false,
     bridge;
   const raw = () => ({
     windowId: 8,
@@ -185,7 +200,7 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   });
   const control = {
     inspect: () => JSON.stringify(raw()),
-    isWeChatActive: () => false,
+    isWeChatInUse: () => userTookOver,
     frontmostPID: () => 99,
     focus: () => assert.equal(bridge.navigating, true),
     clickInput: () => {
@@ -207,5 +222,13 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   const result = await bridge.request("select-session", row);
   assert.equal(result.active.expectedTitle, "乙");
   assert.equal(restored, true);
+  assert.equal(bridge.navigating, false);
+
+  selected = "甲";
+  restored = false;
+  bridge.sleep = async () => { userTookOver = true; };
+  await assert.rejects(() => bridge.request("select-session", row), /正在使用微信/);
+  assert.equal(selected, "甲");
+  assert.equal(restored, false);
   assert.equal(bridge.navigating, false);
 });

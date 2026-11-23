@@ -304,17 +304,20 @@ test("在其他应用操作不会吞掉当前会话的新消息", async (t) => {
   const f = fixture(t);
   f.agent.idleTime = () => 0;
   f.native.backgroundCapable = true;
-  f.native.control = { isWeChatActive: () => false };
+  f.native.control = { isWeChatInUse: () => false };
   await f.agent.start();
   f.rows[0].signature = "new-while-working";
   await f.agent.tick();
   assert.deepEqual(f.sendNames, ["甲"]);
 });
-test("点进微信暂停处理，离开微信后保持接待并继续", async (t) => {
+test("微信操作时暂停，微信仍在前台但操作停止后继续", async (t) => {
   const f = fixture(t);
   let active = false;
   f.native.backgroundCapable = true;
-  f.native.control = { isWeChatActive: () => active };
+  f.native.control = {
+    isWeChatActive: () => true,
+    isWeChatInUse: () => active,
+  };
   await f.agent.start();
   active = true;
   f.agent.setActivityPaused(true);
@@ -325,6 +328,29 @@ test("点进微信暂停处理，离开微信后保持接待并继续", async (t
   active = false;
   f.agent.setActivityPaused(false);
   await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("手写稿清空后，自动接待复核同一条消息并补回", async (t) => {
+  const f = fixture(t);
+  let draft = "自己的草稿";
+  const request = f.native.request;
+  f.native.request = async (cmd, payload) => {
+    const result = await request(cmd, payload);
+    return cmd === "discover" ? { ...result, composerText: draft } : result;
+  };
+  const deliver = f.agent.deliver;
+  f.agent.deliver = (...args) => {
+    if (draft) throw Object.assign(new Error("微信已有草稿"), { needsHuman: true });
+    return deliver(...args);
+  };
+  await f.agent.start();
+  f.rows[0].signature = "new-while-drafting";
+  await f.agent.tick();
+  assert.equal(f.agent.tasks.length, 1);
+  assert.deepEqual(f.sendNames, []);
+  draft = "";
+  await f.agent.tick();
+  assert.equal(f.agent.tasks.length, 0);
   assert.deepEqual(f.sendNames, ["甲"]);
 });
 test("手动提炼当前聊天只读取和保存核心，不发送微信消息", async (t) => {

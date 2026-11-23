@@ -412,8 +412,12 @@ app
     agent.openChatsForSummary = () => wechatTools.openChatsForSummary();
     const activityPoll = setInterval(() => {
       try {
-        if (!native.navigating)
-          agent.setActivityPaused(native.control.isWeChatActive());
+        if (!agent.running) {
+          native.control.stopWeChatActivityMonitor();
+          agent.setActivityPaused(false);
+        } else if (!native.navigating) {
+          agent.setActivityPaused(native.control.isWeChatInUse());
+        }
       } catch {}
     }, 500);
     activityPoll.unref();

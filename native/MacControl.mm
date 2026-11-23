@@ -11,6 +11,13 @@
 // This module is loaded into Electron's main process. macOS therefore checks
 // the same app identity the user granted in System Settings, rather than a CLI.
 namespace {
+constexpr int64_t automationEventTag = 0x5745495849414e47;
+NSTimeInterval lastAutomationEvent = -INFINITY;
+void markAutomation(CGEventRef down, CGEventRef up) {
+  lastAutomationEvent = NSProcessInfo.processInfo.systemUptime;
+  CGEventSetIntegerValueField(down, kCGEventSourceUserData, automationEventTag);
+  CGEventSetIntegerValueField(up, kCGEventSourceUserData, automationEventTag);
+}
 napi_value field(napi_env env, napi_value object, const char *name) {
   napi_value value;
   if (napi_get_named_property(env, object, name, &value) != napi_ok)
@@ -107,6 +114,7 @@ void clickInput(napi_env env,napi_value params) {
   CGEventRef down=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
   CGEventRef up=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);
   if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建输入事件");}
+  markAutomation(down,up);
   CGEventPost(kCGHIDEventTap,down);
   if(hold)std::this_thread::sleep_for(std::chrono::milliseconds((int)hold));
   CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
@@ -116,6 +124,7 @@ void type(napi_env env,napi_value params) {
   for(char16_t character:chars)if(character<32||character==127)throw std::runtime_error("回复中包含不支持的控制字符");
   CGEventRef down=CGEventCreateKeyboardEvent(nullptr,0,true),up=CGEventCreateKeyboardEvent(nullptr,0,false);
   if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建文字输入事件");}
+  markAutomation(down,up);
   CGEventKeyboardSetUnicodeString(down,chars.size(),reinterpret_cast<const UniChar *>(chars.data()));
   CGEventKeyboardSetUnicodeString(up,chars.size(),reinterpret_cast<const UniChar *>(chars.data()));
   CGEventPost(kCGHIDEventTap,down);CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
@@ -124,6 +133,7 @@ void commit(napi_env env,napi_value params) {
   Target target(env,params);target.assertFocused();
   CGEventRef down=CGEventCreateKeyboardEvent(nullptr,36,true),up=CGEventCreateKeyboardEvent(nullptr,36,false);
   if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建发送事件");}
+  markAutomation(down,up);
   CGEventPost(kCGHIDEventTap,down);CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
 }
 napi_value Focus(napi_env e,napi_callback_info i){return run(e,i,focus);}
@@ -275,22 +285,147 @@ void writeMoment(napi_env env,napi_value params){
  CFRelease(input);if(result!=kAXErrorSuccess)throw std::runtime_error("微信未接受正文，请复制草稿后粘贴");
 }
 napi_value WriteMoment(napi_env e,napi_callback_info i){return run(e,i,writeMoment);}
+struct PreparedDraft {
+  pid_t pid = 0;
+  NSString *header = nil;
+  NSUInteger length = 0;
+  NSUInteger hash = 0;
+};
+PreparedDraft preparedDraft;
+
+NSString *chatHeader(AXUIElementRef window) {
+  AXUIElementRef header = findElement(window, @"big_title_line_h_view", nil);
+  if (!header) header = findElement(window, @"current_chat_name_label", nil);
+  NSString *value = header ? stringAttr(header, kAXValueAttribute) : @"";
+  if (header) CFRelease(header);
+  return value;
+}
 void setComposer(napi_env env,napi_value params){
  Target target(env,params);NSString *reply=longString(env,params,"text"),*expected=longString(env,params,"expectedTitle");
- AXUIElementRef win=verifiedChat(target,expected),input=findElement(win,@"chat_input_field",nil);CFRelease(win);
+ AXUIElementRef win=verifiedChat(target,expected),input=findElement(win,@"chat_input_field",nil);
+ NSString *header=chatHeader(win);CFRelease(win);
  if(!input)throw std::runtime_error("无法定位微信输入框");
  NSString *existing=stringAttr(input,kAXValueAttribute);if(existing.length){CFRelease(input);throw std::runtime_error("微信已有草稿，保留给你处理");}
  Boolean settable=false;AXUIElementIsAttributeSettable(input,kAXValueAttribute,&settable);
  if(!settable){CFRelease(input);throw std::runtime_error("当前微信不支持后台输入");}
  AXError result=AXUIElementSetAttributeValue(input,kAXValueAttribute,(__bridge CFStringRef)reply);CFRelease(input);
  if(result!=kAXErrorSuccess)throw std::runtime_error("微信拒绝后台输入，已停止本次回复");
+ preparedDraft = {target.pid, header, reply.length, reply.hash};
+}
+bool isWeChat(NSRunningApplication *application) {
+  NSString *identifier = application.bundleIdentifier;
+  return [identifier isEqualToString:@"com.tencent.xinWeChat"] ||
+         [identifier isEqualToString:@"com.tencent.WeChat"];
+}
+AXUIElementRef focusedWindow(pid_t pid) {
+  AXUIElementRef app = AXUIElementCreateApplication(pid);
+  CFTypeRef focused = nullptr;
+  AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, &focused);
+  CFRelease(app);
+  if (focused && CFGetTypeID(focused) == AXUIElementGetTypeID())
+    return (AXUIElementRef)focused;
+  if (focused) CFRelease(focused);
+  return nullptr;
+}
+
+id activityMonitor = nil;
+pid_t manualWeChatPID = 0;
+NSTimeInterval lastManualInteraction = 0;
+constexpr NSTimeInterval manualHold = 30.0;
+pid_t lastForegroundPID = 0;
+uint32_t lastHardwareKeys = 0;
+uint32_t lastHardwarePointer = 0;
+
+void checkHardwareInteraction(NSRunningApplication *foreground, AXUIElementRef window) {
+  const pid_t pid = foreground.processIdentifier;
+  const uint32_t keys = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown);
+  const uint32_t pointer =
+    CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseDown) +
+    CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventRightMouseDown) +
+    CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventOtherMouseDown) +
+    CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventScrollWheel);
+  const bool pressedInSameApp = pid == lastForegroundPID && keys != lastHardwareKeys;
+  const bool pointerChanged = lastForegroundPID && pointer != lastHardwarePointer;
+  lastForegroundPID = pid;
+  lastHardwareKeys = keys;
+  lastHardwarePointer = pointer;
+
+  const NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+  if (!window || now - lastAutomationEvent < 1 || (!pressedInSameApp && !pointerChanged)) return;
+  if (!pressedInSameApp) {
+    CGEventRef cursor = CGEventCreate(nullptr);
+    if (!cursor) return;
+    const bool inWindow = CGRectContainsPoint(bounds(window), CGEventGetLocation(cursor));
+    CFRelease(cursor);
+    if (!inWindow) return;
+  }
+  manualWeChatPID = pid;
+  lastManualInteraction = now;
+}
+
+void observeWeChatActivity() {
+  if (activityMonitor || !AXIsProcessTrusted()) return;
+  const NSEventMask mask = NSEventMaskKeyDown | NSEventMaskLeftMouseDown |
+    NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown | NSEventMaskScrollWheel |
+    NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
+  activityMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
+    CGEventRef raw = event.CGEvent;
+    if (!raw || CGEventGetIntegerValueField(raw, kCGEventSourceUserData) == automationEventTag ||
+        CGEventGetIntegerValueField(raw, kCGEventSourceUnixProcessID) == NSProcessInfo.processInfo.processIdentifier)
+      return;
+    NSRunningApplication *foreground = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (!isWeChat(foreground)) return;
+
+    pid_t pid = foreground.processIdentifier;
+    const int64_t target = CGEventGetIntegerValueField(raw, kCGEventTargetUnixProcessID);
+    if (target > 0 && target != pid) return;
+    if (target <= 0 && event.type != NSEventTypeKeyDown) {
+      AXUIElementRef window = focusedWindow(pid);
+      if (!window) return;
+      const bool inWindow = CGRectContainsPoint(bounds(window), CGEventGetLocation(raw));
+      CFRelease(window);
+      if (!inWindow) return;
+    }
+
+    // Only retain who is using the app and when, never what they typed.
+    manualWeChatPID = pid;
+    lastManualInteraction = NSProcessInfo.processInfo.systemUptime;
+  }];
+}
+bool weChatInUse() {
+  observeWeChatActivity();
+  NSRunningApplication *foreground = NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (!isWeChat(foreground)) {
+    checkHardwareInteraction(foreground, nullptr);
+    manualWeChatPID = 0;
+    return false;
+  }
+  const pid_t pid = foreground.processIdentifier;
+  AXUIElementRef window = focusedWindow(pid);
+  checkHardwareInteraction(foreground, window);
+  if (pid == manualWeChatPID && NSProcessInfo.processInfo.systemUptime - lastManualInteraction < manualHold) {
+    if (window) CFRelease(window);
+    return true;
+  }
+
+  // This also protects drafts entered through accessibility or input methods.
+  AXUIElementRef composer = window ? findElement(window, @"chat_input_field", nil) : nullptr;
+  NSString *draft = composer ? stringAttr(composer, kAXValueAttribute) : @"";
+  const bool ourDraft = draft.length && pid == preparedDraft.pid &&
+    draft.length == preparedDraft.length && draft.hash == preparedDraft.hash &&
+    [chatHeader(window) isEqualToString:preparedDraft.header];
+  if (composer) CFRelease(composer);
+  if (window) CFRelease(window);
+  manualWeChatPID = 0;
+  return draft.length && !ourDraft;
 }
 void pressSend(napi_env env,napi_value params){
  Target target(env,params);NSString *reply=longString(env,params,"text"),*expected=longString(env,params,"expectedTitle");
+ if(weChatInUse())throw std::runtime_error("你正在使用微信，自动暂停");
  AXUIElementRef win=verifiedChat(target,expected),input=findElement(win,@"chat_input_field",nil);
  NSString *existing=input?stringAttr(input,kAXValueAttribute):@"";
  if(input){
-  if(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=target.pid)AXUIElementSetAttributeValue(input,kAXFocusedAttribute,kCFBooleanTrue);
+  if([existing isEqual:reply])AXUIElementSetAttributeValue(input,kAXFocusedAttribute,kCFBooleanTrue);
   CFRelease(input);
  }
  if(![existing isEqual:reply]){CFRelease(win);throw std::runtime_error("输入内容已变化，不执行发送");}
@@ -306,17 +441,29 @@ void pressSend(napi_env env,napi_value params){
  CFTypeRef enabled=nullptr;AXUIElementCopyAttributeValue(button,kAXEnabledAttribute,&enabled);bool ready=enabled&&CFGetTypeID(enabled)==CFBooleanGetTypeID()&&CFBooleanGetValue((CFBooleanRef)enabled);if(enabled)CFRelease(enabled);
  if(!ready){CFRelease(button);throw std::runtime_error("微信发送按钮尚不可用");}
  CFRelease(button);
- if(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==target.pid)throw std::runtime_error("你正在使用微信，自动暂停");
+ if(weChatInUse())throw std::runtime_error("你正在使用微信，自动暂停");
  // Deliver Return only to the validated WeChat process. Global keyboard focus
  // and the user's current application are untouched.
  CGEventRef down=CGEventCreateKeyboardEvent(nullptr,36,true),up=CGEventCreateKeyboardEvent(nullptr,36,false);
  if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建微信进程发送事件");}
+ markAutomation(down,up);
  CGEventSetFlags(down,0);CGEventSetFlags(up,0);
  CGEventPostToPid(target.pid,down);CGEventPostToPid(target.pid,up);CFRelease(down);CFRelease(up);
 }
 napi_value SetComposer(napi_env e,napi_callback_info i){return run(e,i,setComposer);}
 napi_value PressSend(napi_env e,napi_callback_info i){return run(e,i,pressSend);}
-napi_value WeChatActive(napi_env env,napi_callback_info i){NSString *id=NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;napi_value value;napi_get_boolean(env,[@[@"com.tencent.xinWeChat",@"com.tencent.WeChat"] containsObject:id],&value);return value;}
+napi_value WeChatInUse(napi_env env,napi_callback_info info) {
+  napi_value value;
+  napi_get_boolean(env, weChatInUse(), &value);
+  return value;
+}
+napi_value StopWeChatActivityMonitor(napi_env env,napi_callback_info info) {
+  if (activityMonitor) [NSEvent removeMonitor:activityMonitor];
+  activityMonitor = nil;
+  manualWeChatPID = 0;
+  lastForegroundPID = 0;
+  return done(env);
+}
 napi_value FrontmostPID(napi_env env,napi_callback_info i){napi_value value;napi_create_int32(env,NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,&value);return value;}
 void restoreFocus(napi_env env,napi_value params){
  double raw=number(env,params,"pid");
@@ -332,7 +479,8 @@ napi_value Init(napi_env env,napi_value exports){
   napi_property_descriptor methods[]={
     {"setComposer",nullptr,SetComposer,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"pressSend",nullptr,PressSend,nullptr,nullptr,nullptr,napi_default,nullptr},
-    {"isWeChatActive",nullptr,WeChatActive,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"isWeChatInUse",nullptr,WeChatInUse,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"stopWeChatActivityMonitor",nullptr,StopWeChatActivityMonitor,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"frontmostPID",nullptr,FrontmostPID,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"restoreFocus",nullptr,RestoreFocus,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"capture",nullptr,Capture,nullptr,nullptr,nullptr,napi_default,nullptr},

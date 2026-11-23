@@ -42,9 +42,9 @@ class FleetAgent extends Agent {
     this.activityPaused = active;
     if (active) {
       this.native.cancelSends?.();
-      if (this.running) this.status = "你正在使用微信，AI 已自动暂停";
+      if (this.running) this.status = "检测到微信操作或未发送草稿，AI 已自动暂停";
     } else if (this.running) {
-      this.status = "已离开微信，AI 继续接待";
+      this.status = "微信接待已自动恢复";
       if (!this.busy) {
         clearTimeout(this.timer);
         this.timer = setTimeout(() => this.tick(), 250);
@@ -242,8 +242,8 @@ class FleetAgent extends Agent {
     this.busy = true;
     const ticket = this.epoch;
     try {
-      if (this.activityPaused || this.native.control?.isWeChatActive?.()) {
-        this.status = "你正在使用微信，AI 已自动暂停";
+      if (this.activityPaused || this.native.control?.isWeChatInUse?.()) {
+        this.status = "检测到微信操作或未发送草稿，AI 已自动暂停";
         return;
       }
       let d;
@@ -255,6 +255,14 @@ class FleetAgent extends Agent {
         return;
       }
       if (ticket !== this.epoch) return;
+      const activeRow = d.sessions.find((row) => row.id === d.active?.sessionId);
+      if (activeRow && typeof d.composerText === "string" && !d.composerText.trim() && !this.excluded(activeRow)) {
+        const draftTask = this.tasks.find((task) => task.waitingForDraft && task.context.sessionId === activeRow.id);
+        if (draftTask) {
+          this.tasks = this.tasks.filter((task) => task.id !== draftTask.id);
+          this.queue.set(activeRow.id, { ...activeRow, retryFingerprint: draftTask.snapshot.fingerprint });
+        }
+      }
       const clock = new Date().toLocaleTimeString("en-GB", {
         hour: "2-digit",
         minute: "2-digit",
@@ -291,7 +299,7 @@ class FleetAgent extends Agent {
         this.idleTime() < 5 &&
         (d.active?.sessionId !== row.id ||
           !this.native.backgroundCapable ||
-          this.native.control?.isWeChatActive?.())
+          this.native.control?.isWeChatInUse?.())
       ) {
         this.status =
           d.active?.sessionId === row.id
@@ -456,6 +464,7 @@ class FleetAgent extends Agent {
           snapshot: this.latest,
           draft: null,
           reason: "微信留有你的草稿，请处理后再接待这段会话",
+          waitingForDraft: true,
           analysis: null,
           time: new Date().toISOString(),
         });
