@@ -126,6 +126,8 @@ class MacControlBridge {
     return {
       ...capture,
       lines,
+      messageTime: after?.active?.sessionId && before?.active?.sessionId === after.active.sessionId
+        ? after.messageTime : undefined,
       ...(after?.active ? { calibration: after.active.calibration } : {}),
     };
   }

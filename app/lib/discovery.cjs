@@ -9,6 +9,15 @@ const timeOfDay = /^(?:今天\s*)?(?:[01]?\d|2[0-3]):[0-5]\d$/u;
 const sessionDate = /^(?:(?:昨天|星期.|周.)(?:\s+\d{1,2}:\d{2})?|\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}月\d{1,2}日)$/u;
 const unreadBadge = /^\[(\d+)\+?\s*条\]\s*/u;
 const isNudge = (text) => /^(?:[「“].+[」”]|你)拍了拍/u.test(text);
+function isRecentWeChatTime(label, now = new Date()) {
+  const match = /^(?:(今天|昨天)\s*)?(\d{1,2}):([0-5]\d)$/u.exec(normalize(label));
+  if (!match || Number(match[2]) > 23) return false;
+  const messageMinute = new Date(now);
+  if (match[1] === "昨天") messageMinute.setDate(messageMinute.getDate() - 1);
+  messageMinute.setHours(Number(match[2]), Number(match[3]), 0, 0);
+  const age = Math.floor(now.getTime() / 60000) * 60000 - messageMinute.getTime();
+  return age >= 0 && age <= 10 * 60000;
+}
 function discoverFromAX(raw) {
   if (!raw || !Array.isArray(raw.items) || !raw.windowId)
     throw new Error("无法读取微信会话列表");
@@ -192,8 +201,19 @@ function discoverFromAX(raw) {
       line.mediaType = "file";
     }
   }
+  const latestMessage = [...messageLines].sort((a, b) => b.box.y - a.box.y)[0];
+  const messageTime = latestMessage
+    ? items
+        .filter((item) => item.id !== "chat_bubble_item_view" &&
+          (timeOfDay.test(textOf(item)) || sessionDate.test(textOf(item))))
+        .map((item) => ({ text: textOf(item), box: relative(item.frame) }))
+        .filter(({ box }) => box.y >= active.calibration.messages.y &&
+          box.y < latestMessage.box.y && box.x >= active.calibration.messages.x)
+        .sort((a, b) => b.box.y - a.box.y)[0]?.text
+    : undefined;
   return {
     messageLines,
+    messageTime,
     composerText: input ? String(input.value || "") : undefined,
     windowId: raw.windowId,
     pid: raw.pid,
@@ -215,4 +235,4 @@ function groupAllowed(context, snapshot, settings) {
     "u",
   ).test(message);
 }
-module.exports = { discoverFromAX, groupAllowed };
+module.exports = { discoverFromAX, groupAllowed, isRecentWeChatTime };

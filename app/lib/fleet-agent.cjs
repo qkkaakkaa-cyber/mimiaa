@@ -1,12 +1,13 @@
 const crypto = require("node:crypto");
 const { Agent } = require("./agent.cjs");
-const { parseSnapshot } = require("./domain.cjs");
-const { groupAllowed } = require("./discovery.cjs");
+const { clean, parseSnapshot } = require("./domain.cjs");
+const { groupAllowed, isRecentWeChatTime } = require("./discovery.cjs");
 class FleetAgent extends Agent {
   constructor(options) {
     super(options);
     this.discovery = null;
     this.seen = new Map();
+    this.recentlyChecked = new Map();
     this.queue = new Map();
     this.tasks = [];
     this.processed = 0;
@@ -191,6 +192,7 @@ class FleetAgent extends Agent {
       throw new Error("请先为微响开启屏幕录制，用于本地核对消息");
     const d = await this.discover();
     this.seen = new Map(d.sessions.map((row) => [row.id, row]));
+    this.recentlyChecked.clear();
     this.queue.clear();
     for (const row of d.sessions) {
       if (this.excluded(row) || row.systemOnly) continue;
@@ -282,6 +284,13 @@ class FleetAgent extends Agent {
           this.queue.set(row.id, row);
         }
       }
+      for (const row of d.sessions) {
+        if (!this.queue.has(row.id) && !this.excluded(row) &&
+            this.recentlyChecked.get(row.id) !== row.signature &&
+            isRecentWeChatTime(row.time)) {
+          this.queue.set(row.id, { ...row, recentAudit: true });
+        }
+      }
       const ready = [...this.queue.values()].filter((row) =>
         (!row.retryAfter || row.retryAfter <= Date.now()) &&
         d.sessions.some((session) => session.id === row.id),
@@ -292,6 +301,10 @@ class FleetAgent extends Agent {
           ? "接待中 · 待切换的会话稍后重试"
           : "接待中 · 等待新的私聊和群聊消息";
         if (!this.queue.size && this.idleTime() >= 15) this.scanIdleMoments?.();
+        return;
+      }
+      if (row.recentAudit && !isRecentWeChatTime(row.time)) {
+        this.queue.delete(row.id);
         return;
       }
       if (row.unreadBacklog) {
@@ -332,11 +345,18 @@ class FleetAgent extends Agent {
       if (!context || context.sessionId !== row.id)
         throw new Error("聊天身份无法核对，已停止");
       this.context = context;
-      const snapshot = parseSnapshot(await this.capture(), this.settings());
+      const capture = await this.capture();
+      const snapshot = parseSnapshot(capture, this.settings());
       if (ticket !== this.epoch) return;
       if (!snapshot.titleVerified)
         throw new Error("无法核对当前聊天标题，已停止");
       this.latest = snapshot;
+      this.recentlyChecked.set(row.id, row.signature);
+      if (row.recentAudit && context.kind !== "private") return;
+      if (row.systemOnly && !isRecentWeChatTime(capture.messageTime)) {
+        this.status = "拍一拍之前没有可核对的近期正文，继续接待";
+        return;
+      }
       if (
         row.retryFingerprint &&
         row.retryFingerprint !== snapshot.fingerprint
@@ -380,6 +400,15 @@ class FleetAgent extends Agent {
         sticker: /\[(?:动画)?表情\]/u,
         file: /\[文件\]/u,
       }[snapshot.last?.mediaType];
+      if (row.recentAudit && !row.systemOnly && !snapshot.last?.mediaType && snapshot.last?.role === "in") {
+        const preview = clean(row.preview);
+        const last = clean(snapshot.last.text);
+        if (snapshot.last.text.trim() !== row.preview?.trim() &&
+            (!preview || (!last.startsWith(preview) && !last.endsWith(preview)))) {
+          this.status = "列表预览与最新可见消息不符，继续接待";
+          return;
+        }
+      }
       if (snapshot.last?.role === "in" && mediaPreview && !mediaPreview.test(row.preview || "")) {
         this.status = "媒体消息与会话预览未对上，留给人工核对";
         return;

@@ -6,7 +6,7 @@ const test = require("node:test"),
 const { FleetAgent } = require("../app/lib/fleet-agent.cjs");
 const { Store } = require("../app/lib/store.cjs");
 const { DEFAULT_CALIBRATION } = require("../app/lib/domain.cjs");
-const { groupAllowed, discoverFromAX } = require("../app/lib/discovery.cjs");
+const { groupAllowed, discoverFromAX, isRecentWeChatTime } = require("../app/lib/discovery.cjs");
 const context = (name) => ({
   sessionId: "session_item_" + name,
   expectedTitle: name,
@@ -23,8 +23,8 @@ function fixture(t) {
     model: { baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6" },
   });
   let rows = [
-      { id: "session_item_甲", name: "甲", signature: "old", time: "01:00" },
-      { id: "session_item_乙", name: "乙", signature: "old", time: "01:00" },
+      { id: "session_item_甲", name: "甲", signature: "old", time: "" },
+      { id: "session_item_乙", name: "乙", signature: "old", time: "" },
     ],
     active = context("甲");
   let sendNames = [];
@@ -114,6 +114,45 @@ test("排队期间用户已读，自动接待不再补发", async (t) => {
   f.rows[0].unread = false;
   await f.agent.tick();
   assert.deepEqual(f.sendNames, []);
+});
+test("核对最近十分钟已读私聊，只补回真实来信且同一预览只检查一次", async (t) => {
+  const f = fixture(t);
+  const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  for (const row of f.rows) Object.assign(row, { preview: "你好", time, today: true });
+  const request = f.native.request;
+  f.native.request = async (cmd, payload) => {
+    const result = await request(cmd, payload);
+    if (cmd === "capture" && f.agent.context.expectedTitle === "乙")
+      result.lines.at(-1).outgoing = true;
+    return result;
+  };
+  await f.agent.start();
+  await f.agent.tick();
+  await f.agent.tick();
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("拍一拍盖住预览时，只回答时间可核对的真实消息", async (t) => {
+  const f = fixture(t);
+  const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  for (const row of f.rows) Object.assign(row, { preview: "「对方」拍了拍我", time, today: true, systemOnly: true });
+  const request = f.native.request;
+  f.native.request = async (cmd, payload) => {
+    const result = await request(cmd, payload);
+    if (cmd === "capture") result.messageTime = f.agent.context.expectedTitle === "甲" ? time : "昨天";
+    return result;
+  };
+  await f.agent.start();
+  await f.agent.tick();
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["甲"]);
+});
+test("十分钟核对能跨午夜且排除旧日期和未来时间", () => {
+  const now = new Date(2026, 10, 24, 0, 4, 31);
+  assert.equal(isRecentWeChatTime("昨天 23:54", now), true);
+  assert.equal(isRecentWeChatTime("昨天 23:53", now), false);
+  assert.equal(isRecentWeChatTime("00:05", now), false);
+  assert.equal(isRecentWeChatTime("今天 00:03", now), true);
 });
 test("会话暂时无法取得焦点时，其他会话继续回复", async (t) => {
   const f = fixture(t);
