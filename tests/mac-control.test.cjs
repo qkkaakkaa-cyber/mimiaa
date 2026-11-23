@@ -183,6 +183,7 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   let selected = "甲",
     restored = false,
     userTookOver = false,
+    front = 99,
     bridge;
   const raw = () => ({
     windowId: 8,
@@ -201,14 +202,18 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   const control = {
     inspect: () => JSON.stringify(raw()),
     isWeChatInUse: () => userTookOver,
-    frontmostPID: () => 99,
-    focus: () => assert.equal(bridge.navigating, true),
+    frontmostPID: () => front,
+    focus: () => {
+      assert.equal(bridge.navigating, true);
+      front = 1;
+    },
     clickInput: () => {
       selected = "乙";
     },
     restoreFocus: ({ pid }) => {
       assert.equal(pid, 99);
       restored = true;
+      front = pid;
     },
   };
   bridge = new MacControlBridge({
@@ -231,4 +236,16 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   assert.equal(selected, "甲");
   assert.equal(restored, false);
   assert.equal(bridge.navigating, false);
+
+  userTookOver = false;
+  front = 99;
+  bridge.sleep = async () => {};
+  control.selectChatRow = ({ id }) => {
+    assert.equal(id, row.id);
+    selected = "乙";
+  };
+  control.focus = () => assert.fail("选中后台会话后无需切换前台");
+  const background = await bridge.request("select-session", row);
+  assert.equal(background.active.expectedTitle, "乙");
+  assert.equal(front, 99);
 });

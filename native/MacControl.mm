@@ -88,19 +88,31 @@ napi_value run(napi_env env,napi_callback_info info,void(*callback)(napi_env,nap
     }catch(const std::exception &error){napi_throw_error(env,nullptr,error.what());return nullptr;}
   }
 }
-void focus(napi_env env,napi_value params) {
-  Target target(env,params);CFTypeRef raw=nullptr;
+AXUIElementRef findTargetWindow(const Target &target) {
+  CFTypeRef raw=nullptr;
   if(AXUIElementCopyAttributeValue(target.app,kAXWindowsAttribute,&raw)!=kAXErrorSuccess || !raw || CFGetTypeID(raw)!=CFArrayGetTypeID()) {
     if(raw)CFRelease(raw);throw std::runtime_error("无法定位微信窗口，请检查权限是否生效");
   }
   AXUIElementRef chosen=nullptr;CFArrayRef windows=(CFArrayRef)raw;
   for(CFIndex i=0;i<CFArrayGetCount(windows);i++) {
     AXUIElementRef candidate=(AXUIElementRef)CFArrayGetValueAtIndex(windows,i);
-    if(close(bounds(candidate),target.frame)){chosen=candidate;break;}
+    if(close(bounds(candidate),target.frame)){chosen=(AXUIElementRef)CFRetain(candidate);break;}
   }
-  if(!chosen){CFRelease(raw);throw std::runtime_error("微信窗口布局已变化，请重新读取");}
-  [[NSRunningApplication runningApplicationWithProcessIdentifier:target.pid] activateWithOptions:NSApplicationActivateAllWindows];
-  AXError result=AXUIElementPerformAction(chosen,kAXRaiseAction);CFRelease(raw);
+  CFRelease(raw);
+  if(!chosen)throw std::runtime_error("微信窗口布局已变化，请重新读取");
+  return chosen;
+}
+void focus(napi_env env,napi_value params) {
+  Target target(env,params);
+  AXUIElementRef chosen=findTargetWindow(target);
+  NSRunningApplication *wechat=[NSRunningApplication runningApplicationWithProcessIdentifier:target.pid];
+  if (NSApp.isActive) {
+    [NSApp yieldActivationToApplication:wechat];
+    [wechat activateFromApplication:NSRunningApplication.currentApplication options:NSApplicationActivateAllWindows];
+  } else {
+    [wechat activateWithOptions:NSApplicationActivateAllWindows];
+  }
+  AXError result=AXUIElementPerformAction(chosen,kAXRaiseAction);CFRelease(chosen);
   if(result!=kAXErrorSuccess)throw std::runtime_error("无法激活已选定的微信窗口");
 }
 void clickInput(napi_env env,napi_value params) {
@@ -244,10 +256,40 @@ NSString *longString(napi_env env,napi_value params,const char *key,size_t limit
  napi_value value=field(env,params,key);size_t size=0;if(napi_get_value_string_utf8(env,value,nullptr,0,&size)!=napi_ok||size>limit)throw std::runtime_error("后台输入内容无效");
  std::vector<char> data(size+1);napi_get_value_string_utf8(env,value,data.data(),data.size(),&size);return [[NSString alloc] initWithBytes:data.data() length:size encoding:NSUTF8StringEncoding];
 }
+bool weChatInUse();
+void selectChatRow(napi_env env,napi_value params) {
+  Target target(env,params);
+  NSString *identifier=longString(env,params,"id",1000);
+  if (![identifier hasPrefix:@"session_item_"] || [identifier isEqualToString:@"session_item_折叠的聊天"])
+    throw std::runtime_error("只允许选择主列表中的会话");
+  if (weChatInUse()) throw std::runtime_error("你正在使用微信，稍后继续接待");
+  AXUIElementRef window=findTargetWindow(target);
+  AXUIElementRef list=findElement(window,@"session_list",nil);
+  CFRelease(window);
+  if (!list) throw std::runtime_error("未找到微信会话列表");
+  BOOL folded=[stringAttr(list,kAXDescriptionAttribute) isEqualToString:@"折叠的聊天"] ||
+    [stringAttr(list,kAXTitleAttribute) isEqualToString:@"折叠的聊天"];
+  AXUIElementRef row=folded ? nullptr : findElement(list,identifier,nil);
+  const CGRect listFrame=bounds(list);
+  CFRelease(list);
+  if(!row)throw std::runtime_error("微信会话已离开主列表");
+  const CGRect visible=CGRectIntersection(CGRectIntersection(bounds(row),listFrame),target.frame);
+  CFRelease(row);
+  if(CGRectIsNull(visible)||visible.size.height<12||visible.size.width<25)
+    throw std::runtime_error("微信会话暂时不可见");
+  if (weChatInUse()) throw std::runtime_error("你正在使用微信，稍后继续接待");
+  const CGPoint point=CGPointMake(CGRectGetMidX(visible),CGRectGetMidY(visible));
+  CGEventRef down=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
+  CGEventRef up=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);
+  if(!down||!up){if(down)CFRelease(down);if(up)CFRelease(up);throw std::runtime_error("无法创建会话选择事件");}
+  markAutomation(down,up);
+  CGEventPostToPid(target.pid,down);
+  CGEventPostToPid(target.pid,up);
+  CFRelease(down);CFRelease(up);
+}
+napi_value SelectChatRow(napi_env env,napi_callback_info info){return run(env,info,selectChatRow);}
 AXUIElementRef verifiedChat(Target &target,NSString *expected){
- CFTypeRef windows=nullptr;AXUIElementCopyAttributeValue(target.app,kAXWindowsAttribute,&windows);AXUIElementRef chosen=nullptr;
- if(windows&&CFGetTypeID(windows)==CFArrayGetTypeID())for(CFIndex i=0;i<CFArrayGetCount((CFArrayRef)windows);i++){auto win=(AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)windows,i);if(close(bounds(win),target.frame)){chosen=(AXUIElementRef)CFRetain(win);break;}}
- if(windows)CFRelease(windows);if(!chosen)throw std::runtime_error("微信窗口已变化");
+ AXUIElementRef chosen=findTargetWindow(target);
  AXUIElementRef title=findElement(chosen,@"current_chat_name_label",nil);
  const bool usesHeader=!title;
  if(usesHeader)title=findElement(chosen,@"big_title_line_h_view",nil);
@@ -478,6 +520,7 @@ napi_value RestoreFocus(napi_env e,napi_callback_info i){return run(e,i,restoreF
 napi_value Init(napi_env env,napi_value exports){
   napi_property_descriptor methods[]={
     {"setComposer",nullptr,SetComposer,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"selectChatRow",nullptr,SelectChatRow,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"pressSend",nullptr,PressSend,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"isWeChatInUse",nullptr,WeChatInUse,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"stopWeChatActivityMonitor",nullptr,StopWeChatActivityMonitor,nullptr,nullptr,nullptr,napi_default,nullptr},

@@ -282,10 +282,16 @@ class FleetAgent extends Agent {
           this.queue.set(row.id, row);
         }
       }
-      const row = this.queue.values().next().value;
+      const ready = [...this.queue.values()].filter((row) =>
+        (!row.retryAfter || row.retryAfter <= Date.now()) &&
+        d.sessions.some((session) => session.id === row.id),
+      );
+      const row = ready.find((candidate) => candidate.id === d.active?.sessionId) || ready[0];
       if (!row) {
-        this.status = "接待中 · 等待新的私聊和群聊消息";
-        if (this.idleTime() >= 15) this.scanIdleMoments?.();
+        this.status = this.queue.size
+          ? "接待中 · 待切换的会话稍后重试"
+          : "接待中 · 等待新的私聊和群聊消息";
+        if (!this.queue.size && this.idleTime() >= 15) this.scanIdleMoments?.();
         return;
       }
       if (row.unreadBacklog) {
@@ -317,8 +323,8 @@ class FleetAgent extends Agent {
         });
       } catch (error) {
         if (ticket !== this.epoch) return;
-        this.queue.set(row.id, row);
-        this.status = error.message;
+        this.queue.set(row.id, { ...row, retryAfter: Date.now() + 12000 });
+        this.status = "这段会话暂未切换，其他会话继续接待，稍后重试";
         return;
       }
       if (ticket !== this.epoch) return;

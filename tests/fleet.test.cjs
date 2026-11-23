@@ -115,6 +115,30 @@ test("排队期间用户已读，自动接待不再补发", async (t) => {
   await f.agent.tick();
   assert.deepEqual(f.sendNames, []);
 });
+test("会话暂时无法取得焦点时，其他会话继续回复", async (t) => {
+  const f = fixture(t);
+  let failedSelections = 0;
+  const request = f.native.request;
+  await request("select-session", { id: "session_item_乙" });
+  f.native.request = async (cmd, payload) => {
+    if (cmd === "select-session" && payload.id === "session_item_甲") {
+      failedSelections++;
+      throw new Error("微信暂未取得窗口焦点");
+    }
+    return request(cmd, payload);
+  };
+  await f.agent.start();
+  f.rows[0].signature = "new-but-unavailable";
+  f.rows[1].signature = "new-and-open";
+  await f.agent.tick();
+  await f.agent.tick();
+  f.rows[1].signature = "second-new-and-open";
+  await f.agent.tick();
+  assert.deepEqual(f.sendNames, ["乙", "乙"]);
+  assert.equal(failedSelections, 1);
+  assert.equal(f.agent.running, true);
+  assert.equal(f.agent.queue.has("session_item_甲"), true);
+});
 test("需要人工的聊天进入待办，其他聊天继续处理", async (t) => {
   const f = fixture(t);
   f.agent.intelligence = () => ({

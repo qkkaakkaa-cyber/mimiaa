@@ -146,20 +146,43 @@ class MacControlBridge {
       throw new Error("你正在使用微信，AI 已自动暂停");
     const previousPID = this.control.frontmostPID?.();
     const target = { pid: before.pid, frame: before.frame };
+    const isSelected = (view) =>
+      sameWindow(view, target) &&
+      view.active?.sessionId === id &&
+      view.active.expectedTitle === row.name;
+    const verifyRow = (view) => {
+      const current = view.sessions.find((session) => session.id === id);
+      if (!current || current.signature !== signature || !sameWindow(view, target))
+        throw new Error("会话列表或窗口位置已变化");
+      return current;
+    };
     this.navigating = true;
     try {
+      if (!manual && this.control.selectChatRow) {
+        this.control.selectChatRow({ ...target, id });
+        await this.sleep(500);
+        if (ticket !== this.epoch) throw new Error("接待已暂停");
+        const selected = discover();
+        if (this.control.isWeChatInUse?.())
+          throw new Error("你正在使用微信，稍后继续接待");
+        if (isSelected(selected)) return selected;
+        verifyRow(selected);
+        if (this.idleTime() < 5)
+          throw new Error("已发现消息，等待空闲时切换会话");
+      }
       this.control.focus(target);
-      await this.sleep(350);
+      for (let i = 0; i < 8; i++) {
+        await this.sleep(100);
+        if (ticket !== this.epoch) throw new Error("接待已暂停");
+        if (!this.control.frontmostPID || this.control.frontmostPID() === target.pid) break;
+        if (!manual && this.idleTime() < 5)
+          throw new Error("检测到人工操作，稍后继续接待");
+      }
       if (ticket !== this.epoch) throw new Error("接待已暂停");
-      const current = discover(),
-        again = current.sessions.find((s) => s.id === id);
-      if (
-        !again ||
-        again.signature !== signature ||
-        !sameWindow(current, target)
-      )
-        throw new Error("会话列表或窗口位置已变化");
-      if (!manual && this.control.isWeChatInUse?.())
+      if (this.control.frontmostPID && this.control.frontmostPID() !== target.pid)
+        throw new Error("微信暂未取得窗口焦点");
+      const again = verifyRow(discover());
+      if (!manual && (this.control.isWeChatInUse?.() || this.idleTime() < 5))
         throw new Error("你正在使用微信，稍后继续接待");
       this.control.clickInput({ ...target, input: again.point });
       await this.sleep(manual ? 420 : 5200);
@@ -167,10 +190,7 @@ class MacControlBridge {
         throw new Error("检测到人工操作，稍后继续接待");
       if (ticket !== this.epoch) throw new Error("接待已暂停");
       const after = discover();
-      if (
-        after.active?.sessionId !== id ||
-        after.active.expectedTitle !== row.name
-      )
+      if (!isSelected(after))
         throw new Error("无法核对切换后的聊天对象");
       return after;
     } finally {
@@ -180,6 +200,7 @@ class MacControlBridge {
         if (
           previousPID &&
           previousPID !== target.pid &&
+          this.control.frontmostPID?.() === target.pid &&
           (manual || (this.idleTime() >= 5 && !this.control.isWeChatInUse?.()))
         ) {
           this.control.restoreFocus?.({ pid: previousPID });
