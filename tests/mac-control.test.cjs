@@ -183,12 +183,13 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   let selected = "甲",
     restored = false,
     userTookOver = false,
+    windowX = 0,
     front = 99,
     bridge;
   const raw = () => ({
     windowId: 8,
     pid: 1,
-    frame: { x: 0, y: 0, w: 1000, h: 800 },
+    frame: { x: windowX, y: 0, w: 1000, h: 800 },
     items: [
       item("session_list", "", 60, 80, 250, 700),
       item("session_item_甲", "甲\n你好\n12:00", 60, 90, 250, 70),
@@ -267,5 +268,47 @@ test("自动切换会话期间跳过自己的前台变化，并在无人工干�
   bridge.sleep = async () => {};
   const fallback = await bridge.request("select-session", row);
   assert.equal(fallback.active.expectedTitle, "乙");
+  assert.equal(restored, true);
+
+  selected = "甲";
+  control.selectChatRow = () => {};
+  control.clickChatRow = ({ id }) => {
+    assert.equal(id, row.id);
+    selected = "乙";
+  };
+  control.focus = () => assert.fail("进程内点击已经成功，不需要前置微信");
+  assert.equal((await bridge.request("select-session", row)).active.expectedTitle, "乙");
+  assert.equal(front, 99);
+
+  selected = "甲";
+  restored = false;
+  control.clickChatRow = () => {};
+  control.focus = () => {};
+  let workspaceRequests = 0;
+  control.requestWorkspaceFocus = ({ pid }) => {
+    assert.equal(pid, 1);
+    workspaceRequests++;
+    front = pid;
+    windowX = 24;
+  };
+  let afterClick = null;
+  let ownClickSampled = false;
+  bridge.sleep = async (duration) => {
+    if (afterClick !== null) afterClick += duration;
+  };
+  control.isWeChatInUse = () => {
+    if (afterClick === null) return false;
+    if (afterClick < 1000) ownClickSampled = true;
+    return !ownClickSampled;
+  };
+  control.clickInput = ({ frame }) => {
+    assert.equal(frame.x, 24);
+    selected = "乙";
+    afterClick = 0;
+  };
+  const workspaceFallback = await bridge.request("select-session", row);
+  assert.equal(workspaceFallback.active.expectedTitle, "乙");
+  assert.equal(workspaceRequests, 1);
+  assert.equal(ownClickSampled, true);
   assert.equal(restored, true);
 });

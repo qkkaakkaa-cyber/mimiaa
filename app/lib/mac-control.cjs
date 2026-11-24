@@ -149,7 +149,7 @@ class MacControlBridge {
     const previousPID = this.control.frontmostPID?.();
     const target = { pid: before.pid, frame: before.frame };
     const sameSelectionWindow = (view) =>
-      view.windowId === before.windowId && sameWindow(view, target);
+      view.windowId === before.windowId && view.pid === target.pid;
     const isSelected = (view) =>
       sameSelectionWindow(view) &&
       view.active?.sessionId === id &&
@@ -158,6 +158,7 @@ class MacControlBridge {
       const current = view.sessions.find((session) => session.id === id);
       if (!current || current.signature !== signature || !sameSelectionWindow(view))
         throw new Error("会话列表或窗口位置已变化");
+      target.frame = view.frame;
       return current;
     };
     const checkSelection = () => {
@@ -165,41 +166,85 @@ class MacControlBridge {
       if (!manual && this.control.isWeChatInUse?.())
         throw new Error("你正在使用微信，稍后继续接待");
     };
+    const confirmSelection = async (delays) => {
+      for (const delay of delays) {
+        await this.sleep(delay);
+        checkSelection();
+        const selected = discover();
+        if (isSelected(selected)) return selected;
+        verifyRow(selected);
+      }
+      return null;
+    };
+    const waitForForeground = async (attempts) => {
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        await this.sleep(100);
+        checkSelection();
+        if (!this.control.frontmostPID || this.control.frontmostPID() === target.pid) return true;
+        if (!manual && this.idleTime() < 5)
+          throw new Error("检测到人工操作，稍后继续接待");
+      }
+      return false;
+    };
     this.navigating = true;
     try {
       if (!manual && this.control.selectChatRow) {
+        let pressed = false;
         try {
           this.control.selectChatRow({ ...target, id });
+          pressed = true;
         } catch {
           // An AX action can fail before or after WeChat receives it.
           // Always read back the selection before using the foreground path.
         }
-        for (const delay of [300, 350, 500, 500]) {
-          await this.sleep(delay);
-          checkSelection();
-          const selected = discover();
-          if (isSelected(selected)) return selected;
-          verifyRow(selected);
-        }
+        const selected = await confirmSelection(pressed ? [300, 350, 500, 500] : [300]);
+        if (selected) return selected;
         if (this.idleTime() < 5)
           throw new Error("已发现消息，等待空闲时切换会话");
+        if (this.control.clickChatRow) {
+          this.control.clickChatRow({ ...target, id });
+          const clicked = await confirmSelection([450, 450]);
+          if (clicked) return clicked;
+          if (this.idleTime() < 5) {
+            await this.sleep(5000);
+            checkSelection();
+            const settled = discover();
+            if (isSelected(settled)) return settled;
+            verifyRow(settled);
+          }
+          if (this.idleTime() < 5)
+            throw new Error("已发现消息，等待空闲时切换会话");
+        }
       }
-      this.control.focus(target);
-      for (let i = 0; i < 16; i++) {
-        await this.sleep(100);
-        checkSelection();
-        if (!this.control.frontmostPID || this.control.frontmostPID() === target.pid) break;
-        if (!manual && this.idleTime() < 5)
-          throw new Error("检测到人工操作，稍后继续接待");
+      let foreground = this.control.frontmostPID?.() === target.pid;
+      if (!foreground) {
+        try {
+          this.control.focus(target);
+        } catch (error) {
+          if (!this.control.requestWorkspaceFocus) throw error;
+        }
+        foreground = await waitForForeground(7);
+      }
+      if (!foreground && this.control.requestWorkspaceFocus) {
+        verifyRow(discover());
+        this.control.requestWorkspaceFocus(target);
+        foreground = await waitForForeground(18);
       }
       checkSelection();
-      if (this.control.frontmostPID && this.control.frontmostPID() !== target.pid)
+      if (!foreground)
         throw new Error("微信暂未取得窗口焦点");
       const again = verifyRow(discover());
       if (!manual && (this.control.isWeChatInUse?.() || this.idleTime() < 5))
         throw new Error("你正在使用微信，稍后继续接待");
       this.control.clickInput({ ...target, input: again.point });
-      await this.sleep(manual ? 420 : 5200);
+      if (manual) await this.sleep(420);
+      else {
+        // Sample hardware counters while the native layer can still identify
+        // our click. The next poll must measure only intervening user input.
+        await this.sleep(150);
+        checkSelection();
+        await this.sleep(5050);
+      }
       if (!manual && (this.idleTime() < 5 || this.control.isWeChatInUse?.()))
         throw new Error("检测到人工操作，稍后继续接待");
       if (ticket !== this.epoch) throw new Error("接待已暂停");

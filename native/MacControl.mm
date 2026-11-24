@@ -119,6 +119,24 @@ void focus(napi_env env,napi_value params) {
   CFRelease(chosen);
   if(result!=kAXErrorSuccess)throw std::runtime_error("无法激活已选定的微信窗口");
 }
+void requestWorkspaceFocus(napi_env env,napi_value params) {
+  Target target(env,params);
+  AXUIElementRef window=findTargetWindow(target);
+  CFRelease(window);
+  NSRunningApplication *wechat=[NSRunningApplication runningApplicationWithProcessIdentifier:target.pid];
+  if (!wechat.bundleURL) throw std::runtime_error("无法定位正在运行的微信");
+  NSWorkspaceOpenConfiguration *configuration=NSWorkspaceOpenConfiguration.configuration;
+  configuration.activates=YES;
+  configuration.createsNewApplicationInstance=NO;
+  configuration.addsToRecentItems=NO;
+  configuration.promptsUserIfNeeded=NO;
+  [NSWorkspace.sharedWorkspace openApplicationAtURL:wechat.bundleURL
+                                     configuration:configuration
+                                 completionHandler:nil];
+}
+napi_value RequestWorkspaceFocus(napi_env env,napi_callback_info info) {
+  return run(env,info,requestWorkspaceFocus);
+}
 void clickInput(napi_env env,napi_value params) {
   Target target(env,params);target.assertFocused();
   napi_value input=field(env,params,"input");double x=number(env,input,"x"),y=number(env,input,"y");
@@ -278,7 +296,8 @@ NSString *longString(napi_env env,napi_value params,const char *key,size_t limit
  std::vector<char> data(size+1);napi_get_value_string_utf8(env,value,data.data(),data.size(),&size);return [[NSString alloc] initWithBytes:data.data() length:size encoding:NSUTF8StringEncoding];
 }
 bool weChatInUse();
-void selectChatRow(napi_env env,napi_value params) {
+enum class ChatSelectionMode { Preferred, TargetedClick };
+void selectChatRow(napi_env env,napi_value params,ChatSelectionMode mode) {
   Target target(env,params);
   NSString *identifier=longString(env,params,"id",1000);
   if (![identifier hasPrefix:@"session_item_"] || [identifier isEqualToString:@"session_item_折叠的聊天"])
@@ -301,7 +320,8 @@ void selectChatRow(napi_env env,napi_value params) {
   }
   CFArrayRef actions=nullptr;
   bool supportsPress=false;
-  if (AXUIElementCopyActionNames(row,&actions)==kAXErrorSuccess&&actions)
+  if (mode==ChatSelectionMode::Preferred &&
+      AXUIElementCopyActionNames(row,&actions)==kAXErrorSuccess&&actions)
     supportsPress=CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXPressAction);
   if(actions)CFRelease(actions);
   if (weChatInUse()) {
@@ -316,6 +336,8 @@ void selectChatRow(napi_env env,napi_value params) {
     return;
   }
   CFRelease(row);
+  if (mode==ChatSelectionMode::Preferred)
+    throw std::runtime_error("当前会话不支持辅助功能按压");
   const CGPoint point=CGPointMake(CGRectGetMidX(visible),CGRectGetMidY(visible));
   CGEventRef down=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
   CGEventRef up=CGEventCreateMouseEvent(nullptr,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);
@@ -325,7 +347,14 @@ void selectChatRow(napi_env env,napi_value params) {
   CGEventPostToPid(target.pid,up);
   CFRelease(down);CFRelease(up);
 }
-napi_value SelectChatRow(napi_env env,napi_callback_info info){return run(env,info,selectChatRow);}
+void selectChatRowPreferred(napi_env env,napi_value params) {
+  selectChatRow(env,params,ChatSelectionMode::Preferred);
+}
+void clickChatRow(napi_env env,napi_value params) {
+  selectChatRow(env,params,ChatSelectionMode::TargetedClick);
+}
+napi_value SelectChatRow(napi_env env,napi_callback_info info){return run(env,info,selectChatRowPreferred);}
+napi_value ClickChatRow(napi_env env,napi_callback_info info){return run(env,info,clickChatRow);}
 AXUIElementRef verifiedChat(Target &target,NSString *expected){
  AXUIElementRef chosen=findTargetWindow(target);
  AXUIElementRef title=findElement(chosen,@"current_chat_name_label",nil);
@@ -647,6 +676,7 @@ napi_value Init(napi_env env,napi_value exports){
   napi_property_descriptor methods[]={
     {"setComposer",nullptr,SetComposer,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"selectChatRow",nullptr,SelectChatRow,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"clickChatRow",nullptr,ClickChatRow,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"pressSend",nullptr,PressSend,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"isWeChatInUse",nullptr,WeChatInUse,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"stopWeChatActivityMonitor",nullptr,StopWeChatActivityMonitor,nullptr,nullptr,nullptr,napi_default,nullptr},
@@ -662,6 +692,7 @@ napi_value Init(napi_env env,napi_value exports){
     {"writeMoment",nullptr,WriteMoment,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"isTrusted",nullptr,Trusted,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"focus",nullptr,Focus,nullptr,nullptr,nullptr,napi_default,nullptr},
+    {"requestWorkspaceFocus",nullptr,RequestWorkspaceFocus,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"clickInput",nullptr,Click,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"typeChunk",nullptr,Type,nullptr,nullptr,nullptr,napi_default,nullptr},
     {"commit",nullptr,Commit,nullptr,nullptr,nullptr,napi_default,nullptr}};
