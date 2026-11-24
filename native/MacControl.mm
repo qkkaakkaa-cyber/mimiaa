@@ -2,6 +2,7 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -461,6 +462,10 @@ void checkHardwareInteraction(NSRunningApplication *foreground, AXUIElementRef w
 
   const NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
   if (!window || now - lastAutomationEvent < 1 || (!pressedInSameApp && !pointerChanged)) return;
+  const auto inputAge=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType);
+  // Counters can change while polling is suspended during a chat switch.
+  // An old change must not become a fresh manual hold on the next poll.
+  if (!std::isfinite(inputAge) || inputAge>1 || now-inputAge<lastAutomationEvent+0.15) return;
   if (!pressedInSameApp) {
     CGEventRef cursor = CGEventCreate(nullptr);
     if (!cursor) return;
@@ -469,7 +474,7 @@ void checkHardwareInteraction(NSRunningApplication *foreground, AXUIElementRef w
     if (!inWindow) return;
   }
   manualWeChatPID = pid;
-  lastManualInteraction = now;
+  lastManualInteraction = std::max(lastManualInteraction, now-inputAge);
 }
 
 void observeWeChatActivity() {
@@ -498,7 +503,7 @@ void observeWeChatActivity() {
 
     // Only retain who is using the app and when, never what they typed.
     manualWeChatPID = pid;
-    lastManualInteraction = NSProcessInfo.processInfo.systemUptime;
+    lastManualInteraction = std::max(lastManualInteraction, event.timestamp);
   }];
 }
 bool weChatInUse() {
